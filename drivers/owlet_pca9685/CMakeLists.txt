@@ -16,6 +16,7 @@ if(ESP_PLATFORM)
     )
 else()
     add_library(owlet_pca9685 STATIC ${OWLET_PCA9685_SRCS})
+    add_library(owlet::pca9685 ALIAS owlet_pca9685)
     target_include_directories(owlet_pca9685 PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )

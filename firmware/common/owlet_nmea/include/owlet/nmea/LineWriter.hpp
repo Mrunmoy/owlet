@@ -1,13 +1,13 @@
 #pragma once
 
-#include "owlet/protocol/Checksum.hpp"
+#include "owlet/nmea/Checksum.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::protocol
+namespace owlet::nmea
 {
 
 // Builds one outgoing "$NAME,f1,f2*HH\r\n" line in a fixed buffer.
@@ -48,4 +48,4 @@ private:
     bool                       m_overflowed{false};
 };
 
-} // namespace owlet::protocol
+} // namespace owlet::nmea

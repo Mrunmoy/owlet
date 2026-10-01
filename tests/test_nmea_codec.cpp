@@ -1,8 +1,8 @@
-#include "owlet/protocol/Checksum.hpp"
-#include "owlet/protocol/LineFramer.hpp"
-#include "owlet/protocol/LineWriter.hpp"
-#include "owlet/protocol/Request.hpp"
-#include "owlet/protocol/Sentence.hpp"
+#include "owlet/nmea/Checksum.hpp"
+#include "owlet/nmea/LineFramer.hpp"
+#include "owlet/nmea/LineWriter.hpp"
+#include "owlet/nmea/Request.hpp"
+#include "owlet/nmea/Sentence.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-using namespace ::owlet::protocol;
+using namespace ::owlet::nmea;
 
 namespace
 {

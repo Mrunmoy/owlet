@@ -6,10 +6,12 @@
 //
 // With --link PATH the pty is also symlinked to PATH for a stable name.
 
-#include "owlet/core/CommandProcessor.hpp"
+#include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/hal/ISerialPort.hpp"
+#include "owlet/nmea/NmeaProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
 #include "owlet/sim/PCA9685Simulator.hpp"
 #include "owlet/sim/VirtualI2CBus.hpp"
@@ -154,11 +156,12 @@ int main(int argc, char** argv)
     std::printf("%s\n", link.empty() ? port.slavePath() : link.c_str());
     std::fflush(stdout);
 
-    ::owlet::core::CommandProcessor proc(port, head, ::owlet::core::kFirmwareVersion);
-    proc.begin(millis());
+    ::owlet::nmea::NmeaProtocol protocol(port, head, ::owlet::core::kFirmwareVersion);
+    ::owlet::core::ControlLoop  loop(port, head, protocol);
+    loop.begin(millis());
     while (g_stop == 0)
     {
-        proc.service(millis());
+        loop.service(millis());
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!link.empty())

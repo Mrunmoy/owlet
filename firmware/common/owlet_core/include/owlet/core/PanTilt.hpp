@@ -1,5 +1,7 @@
 #pragma once
 
+#include "owlet/core/IPanTilt.hpp"
+#include "owlet/core/ITickable.hpp"
 #include "owlet/servo/Servo.hpp"
 
 #include <cstdint>
@@ -7,62 +9,37 @@
 namespace owlet::core
 {
 
-// Two-axis head: the motion model behind the protocol. Owns the
-// enabled/disabled policy and range checks; Servo owns mapping and slew.
-class PanTilt
+// Two-axis head on two Servo objects. Owns the enable/limit/motion policy;
+// Servo owns mapping and slew.
+class PanTilt final : public IPanTilt, public ITickable
 {
 public:
-    enum class Result : uint8_t
-    {
-        Ok,
-        Range,
-        Disabled,
-        Bus,
-    };
-
-    enum class State : uint8_t
-    {
-        Disabled,
-        Moving,
-        Holding,
-    };
-
     PanTilt(::owlet::Servo& pan, ::owlet::Servo& tilt);
 
     PanTilt(const PanTilt&)            = delete;
     PanTilt& operator=(const PanTilt&) = delete;
 
-    // ── Power ───────────────────────────────────────────────────────────────
+    // ── IPanTilt ────────────────────────────────────────────────────────────
 
-    // Energise both axes at their last known position. No-op if enabled.
-    [[nodiscard]] Result enable();
-    // Energise both axes at the given pose (snap). If already enabled this is
-    // a slewed move instead: a running head must never snap.
-    [[nodiscard]] Result enableAt(float panDeg, float tiltDeg);
-    [[nodiscard]] Result disable();
+    [[nodiscard]] Result enable() override;
+    [[nodiscard]] Result enableAt(float panDeg, float tiltDeg) override;
+    [[nodiscard]] Result disable() override;
 
-    // ── Motion ──────────────────────────────────────────────────────────────
+    [[nodiscard]] Result move(float panDeg, float tiltDeg) override;
+    [[nodiscard]] Result nudge(float dPanDeg, float dTiltDeg) override;
+    [[nodiscard]] Result home() override;
+    [[nodiscard]] Result stop() override;
+    [[nodiscard]] Result setSpeed(float degPerSec) override;
 
-    [[nodiscard]] Result move(float panDeg, float tiltDeg);
-    // Relative to the current target; clamps instead of rejecting so jogging
-    // against a limit just stops there.
-    [[nodiscard]] Result nudge(float dPanDeg, float dTiltDeg);
-    [[nodiscard]] Result home();
-    [[nodiscard]] Result stop();
-    [[nodiscard]] Result setSpeed(float degPerSec);
+    [[nodiscard]] State state() const override;
+    [[nodiscard]] Pose position() const override;
+    [[nodiscard]] Pose target() const override;
+    [[nodiscard]] float speed() const override;
+    [[nodiscard]] Limits limits() const override;
 
-    [[nodiscard]] bool tick(uint32_t dtMs);
+    // ── ITickable ───────────────────────────────────────────────────────────
 
-    // ── Introspection ───────────────────────────────────────────────────────
-
-    [[nodiscard]] State state() const;
-    float speed() const { return m_pan.speed(); }
-    float panDeg() const { return m_pan.positionDeg(); }
-    float tiltDeg() const { return m_tilt.positionDeg(); }
-    float panTargetDeg() const { return m_pan.targetDeg(); }
-    float tiltTargetDeg() const { return m_tilt.targetDeg(); }
-    const ::owlet::Servo& panServo() const { return m_pan; }
-    const ::owlet::Servo& tiltServo() const { return m_tilt; }
+    [[nodiscard]] TickStatus tick(uint32_t dtMs) override;
 
 private:
     [[nodiscard]] static bool inLimits(const ::owlet::Servo& s, float deg);

@@ -47,50 +47,105 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 
 ## 4. Software architecture
 
+### 4.1 Layers and interfaces
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ apps/esp32-owlet/main      composition root (wiring only)     │
-│ apps/host-sim              same core on a Linux pty           │
-└──────────────┬───────────────────────────────────────────────┘
-               │
-┌──────────────┴───────────────┐  ┌─────────────────────────────┐
-│ firmware/common/owlet_core   │  │ firmware/common/            │
-│   CommandProcessor           │──│   owlet_protocol            │
-│   PanTilt                    │  │   Checksum, LineFramer,     │
-└──────────────┬───────────────┘  │   Request parser, Reply fmt │
-               │                  └─────────────────────────────┘
-┌──────────────┴───────────────┐
-│ drivers/owlet_servo  Servo   │  angle↔pulse, deg/s slew, engage/release
-└──────────────┬───────────────┘
-┌──────────────┴───────────────┐
-│ drivers/owlet_pca9685        │  register-level PWM driver
-└──────────────┬───────────────┘
-┌──────────────┴───────────────┐
-│ drivers/owlet_hal            │  II2CBus, IDelayProvider, IServoChannel, ISerialPort
-└──────────────┬───────────────┘
-┌──────────────┴───────────────┐
-│ platform/owlet_esp32         │  Esp32I2CBus, Esp32Delay, Esp32UsbSerial
-└──────────────────────────────┘
+ apps/esp32-owlet, apps/host-sim          composition roots: construct + inject, no logic
+        │
+        ├── ControlLoop ──────────────► ITickable (motion)      IByteSource (input)
+        │        │
+        │        ▼
+        │   IProtocol ◄── ProtocolMux<N>   (composite: several protocols, one port)
+        │        ▲
+        │        ├── nmea::NmeaProtocol    owlet native "$…*HH" protocol  (owlet_nmea)
+        │        └── your protocol         implement IProtocol, inject it (Pelco-D, G-code, binary, …)
+        │                 │
+        │                 ▼  (protocols depend only on these abstractions)
+        │            IPanTilt  ─────────── IByteSink (output)
+        │                 ▲
+        ├── PanTilt : IPanTilt, ITickable           owlet_core
+        │       └── Servo ── IServoChannel           owlet_servo
+        │                        ▲
+        ├── PCA9685::Channel ────┘                   owlet_pca9685 ── II2CBus, IDelayProvider
+        └── Esp32UsbSerial : IByteSource, IByteSink  owlet_esp32
 ```
 
-Dependency rules:
+| Interface | Owner | Role |
+|-----------|-------|------|
+| `hal::IByteSource` / `hal::IByteSink` | `owlet_hal` | Input and output halves of a byte stream. `ISerialPort` combines them. Protocols only receive a sink; the loop only receives a source. |
+| `hal::IServoChannel` | `owlet_hal` | One PWM output: the seam for PCA9685, LEDC or anything else. |
+| `core::IPanTilt` | `owlet_core` | Everything a protocol may ask of the head: enable/disable, move/nudge/home/stop, speed, pose, limits, state. A stepper-based head would implement this and reuse every protocol unchanged. |
+| `core::ITickable` | `owlet_core` | `tick(dtMs) → TickStatus`: advance motion and report events (bus fault, watchdog trip). Only the loop calls it, never a protocol. |
+| `core::IProtocol` | `owlet_core` | A wire protocol: `claims()` / `consume()` / `begin()` / `onTick()` (see §4.3). |
 
-- Layers depend only downward.
-- `drivers/` and `firmware/common/` are C++17 with no ESP-IDF headers and no heap. They build on the host for tests.
+The SOLID principles map onto this as follows:
+
+- **Single responsibility:** `ControlLoop` schedules; protocols translate bytes to `IPanTilt` calls; `PanTilt` enforces policy; `Servo` maps and slews; drivers talk to silicon.
+- **Open/closed:** adding a protocol or a motion backend means adding a class. No existing class changes.
+- **Liskov substitution:** every `IProtocol` works standalone *or* inside `ProtocolMux`, and every `IPanTilt` works under every protocol.
+- **Interface segregation:** protocols can't tick motion or read the port; the loop can't issue moves.
+- **Dependency inversion:** `owlet_core` depends on no protocol. Protocols depend on `IPanTilt`/`IByteSink`, never on `PanTilt` or a platform type.
+
+Rules:
+
+- `drivers/` and `firmware/common/` are C++17 with no ESP-IDF headers, no heap, no exceptions and no RTTI. They build on the host for tests.
 - `platform/owlet_esp32/` and `apps/esp32-owlet/` are the only places ESP-IDF headers may appear.
 - The `owlet_` directory prefix keeps ESP-IDF component names (= directory basename) unique.
-- The core is clocked through `tick(nowMs)`. It never reads a clock or sleeps by itself, so tests use a fake clock.
+- Nothing in the core reads a clock or sleeps. Time comes in through `service(nowMs)`, so tests use a fake clock.
 
-### 4.1 Control loop
+### 4.2 Control loop
 
-`app_main` runs one loop at 100 Hz:
+`ControlLoop::service(nowMs)` runs at 100 Hz on one task:
 
-1. Drain all available bytes from `ISerialPort` into `CommandProcessor::feed()`. Complete frames are parsed and executed immediately, and replies are written back.
-2. `CommandProcessor::tick(nowMs)` advances both servos' slew by the elapsed time, emits `$ARRIVED` when a move completes, and emits `$POS` at the streaming rate.
+1. `ITickable::tick(dt)` advances both servos, with `dt` capped at 100 ms so a starved loop resumes smoothly instead of lurching.
+2. `IProtocol::onTick(nowMs, status)` lets the protocol emit time-driven output: arrival events, position streams, watchdog and bus-fault reports.
+3. Bytes are drained from `IByteSource` in 64-byte chunks and handed to `IProtocol::consume()`. Replies are written synchronously to the protocol's `IByteSink`.
 
-There's one task and one owner of all state, so nothing needs a mutex.
+Motion is ticked before input is read, so a reply is never preceded by an event caused by the request it answers. One task owns all state, so nothing needs a mutex.
 
-## 5. Wire protocol (v1)
+### 4.3 The `IProtocol` contract
+
+```cpp
+struct ConsumeResult { std::size_t consumed; bool released; };
+
+class IProtocol {
+    virtual bool claims(uint8_t byte, bool atLineStart) const = 0;  // may I own the stream from here?
+    virtual ConsumeResult consume(const uint8_t* data, std::size_t len) = 0;
+    virtual void begin(uint32_t nowMs) = 0;                          // boot banner
+    virtual void onTick(uint32_t nowMs, const TickStatus& status) = 0;
+};
+```
+
+- `consume()` must consume at least one byte when `len > 0`, and reports `released = true` at the end of each frame (for line protocols, at CR/LF).
+- `claims()` is only used by `ProtocolMux`. Native frames are claimed on `$` anywhere, which keeps NMEA's resync behaviour. A line protocol such as G-code would claim only at line start (`atLineStart`), and a binary protocol such as Pelco-D would claim its `0xFF` sync byte anywhere.
+- `ProtocolMux<N>` offers each frame's first byte to its protocols in order. The first one that claims it owns the stream until it releases. Bytes nobody claims are dropped up to the end of the line, which is how the ROM boot banner is discarded. The mux feeds whole chunks to the owner, so each chunk costs one virtual call rather than one per byte.
+- The mux is itself an `IProtocol` (composite), so a single protocol and a mux are interchangeable at the composition root.
+
+### 4.4 Writing your own protocol
+
+1. Create a component (e.g. `firmware/common/my_proto/`) that depends on `owlet_core` only.
+2. Implement `IProtocol`. Take `IPanTilt&` and `IByteSink&` in the constructor.
+3. In `apps/esp32-owlet/main/main.cpp`, construct it and add it to the `ProtocolMux` (or pass it to `ControlLoop` directly if it should be the only protocol).
+4. Unit-test it on the host with a real `PanTilt` over `FakeServoChannel`, or with your own `IPanTilt` fake. See `tests/test_nmea_protocol.cpp` for the pattern.
+
+### 4.5 Efficiency
+
+- No dynamic allocation anywhere in firmware code. Every buffer is a fixed `std::array` sized at compile time (frame 80 B, reply line 82 B, read chunk 64 B).
+- Virtual dispatch happens once per chunk of input and once per tick per protocol, never per byte inside a protocol.
+- Number formatting is integer fixed-point, so neither target nor host uses `printf` float formatting.
+- `ProtocolMux<N>` takes its protocol count as a template parameter and stores plain pointers in a `std::array`.
+
+### 4.6 Using owlet as a submodule
+
+- **Host CMake:** `add_subdirectory(owlet)` gives the `owlet::hal`, `owlet::pca9685`, `owlet::servo`, `owlet::core` and `owlet::nmea` targets. Tests and the simulator are built only when owlet is the top-level project (`OWLET_BUILD_TESTS` defaults to `PROJECT_IS_TOP_LEVEL`).
+- **ESP-IDF:** `include(owlet/cmake/owlet-idf-components.cmake)` and append `${OWLET_IDF_COMPONENT_DIRS}` to `EXTRA_COMPONENT_DIRS`. The bundled app uses this same list.
+- **Python:** `pip install ./owlet/tools/python`, or `pip install -e` for development.
+
+## 5. Native wire protocol (v2)
+
+This is owlet's built-in protocol. It is designed for **closed-loop control from a PC**, such as camera-based object tracking: commands replace the current goal immediately instead of queuing, velocity mode with a safety watchdog maps directly onto a tracking controller's output, and timestamped position streaming lets the PC know where the head pointed when each camera frame was taken. Other protocols can be added as plug-ins (§4.4).
+
+Version 2 (owlet 0.2.0) added `VEL`, `WATCHDOG`, `CLOCK`, `$TIMEOUT`, and the timestamp field on `$POS`. Clients must check the version in `$PONG`.
 
 ### 5.1 Framing
 
@@ -117,7 +172,7 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 
 | Request                     | Success reply                         | Notes |
 |-----------------------------|---------------------------------------|-------|
-| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,1,0.1.0` |
+| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,2,0.2.0` |
 | `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both servos at their last known position (initially 0,0). No-op if already enabled. |
 | `$ENABLE,<pan>,<tilt>`      | `$ACK,ENABLE`                         | Energise at the given pose (snap). If already enabled, this is a slewed move and earns an `$ARRIVED`. |
 | `$DISABLE`                  | `$ACK,DISABLE`                        | PWM off; servos go limp. Target is kept. |
@@ -130,8 +185,14 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 | `$POS`                      | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<st>` | See §5.5. |
 | `$STREAM,<hz>`              | `$ACK,STREAM`                         | 0 = off, 1–50 Hz periodic `$POS`. |
 | `$LIMITS`                   | `$LIMITS,<pmin>,<pmax>,<tmin>,<tmax>` | Soft limits in degrees. |
+| `$VEL,<pan°/s>,<tilt°/s>`   | `$ACK,VEL`                            | Velocity mode: turn continuously at these signed rates (each −500…500). The head stops at soft limits without error. Replaces any position move (no `$ARRIVED`); any `MOVE`/`NUDGE`/`HOME`/`STOP`/`DISABLE` ends it. Guarded by the watchdog. |
+| `$WATCHDOG`                 | `$WATCHDOG,<ms>`                      | Query the velocity watchdog timeout. |
+| `$WATCHDOG,<ms>`            | `$ACK,WATCHDOG`                       | 0 = off, otherwise 50–5000 ms. Default 500. |
+| `$CLOCK`                    | `$CLOCK,<ms>`                         | Device uptime in ms (wraps after ~49.7 days), for clock sync. |
 
-`MOVE`, `NUDGE`, `HOME` and `STOP` require the servos to be enabled; otherwise the reply is `$NAK,<CMD>,DIS`. This means a PC can't make the head snap by queuing a move while it's limp. The only way to choose the energise pose is the explicit `ENABLE,<pan>,<tilt>`.
+`MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` require the servos to be enabled; otherwise the reply is `$NAK,<CMD>,DIS`. This means a PC can't make the head snap by queuing a move while it's limp. The only way to choose the energise pose is the explicit `ENABLE,<pan>,<tilt>`.
+
+**Velocity watchdog.** In velocity mode the PC must refresh `VEL` at least once per watchdog period. If it doesn't, because the tracking program crashed, hung or lost the cable, the device stops both axes where they are (staying enabled) and sends `$TIMEOUT,VEL` once. Position moves aren't guarded: they end by themselves.
 
 ### 5.4 Errors
 
@@ -152,16 +213,19 @@ Frame-level problems use `$ERR` because the command name can't be trusted. Every
 ### 5.5 Position reporting
 
 ```
-$POS,<pan>,<tilt>,<target_pan>,<target_tilt>,<state>
+$POS,<pan>,<tilt>,<target_pan>,<target_tilt>,<state>,<ms>
 ```
 
-`state` is `D` (disabled), `M` (moving: slew in progress) or `H` (holding at target).
+`state` is `D` (disabled), `M` (moving: slew or velocity mode in progress) or `H` (holding). `ms` is the device uptime at which the pose was sampled, the same clock as `$CLOCK`. In velocity mode the target equals the position.
+
+**Latency compensation.** A tracking loop needs to know where the camera pointed *when a frame was captured*, not when the detection finished. The client estimates the device-to-host clock offset with `$CLOCK` round trips (taking the minimum-RTT sample), stamps every streamed `$POS` with the host time, and interpolates the pose at any host timestamp (§7).
 
 Unsolicited messages (device → PC):
 
 | Message                 | When |
 |-------------------------|------|
 | `$READY,<proto>,<fw>`   | Once after boot, when the core is ready |
+| `$TIMEOUT,VEL`          | The velocity watchdog stopped the head |
 | `$ARRIVED,<pan>,<tilt>` | Exactly once per accepted `MOVE`/`NUDGE`/`HOME`, even a zero-length one, so clients can always wait on it. `STOP` and `DISABLE` cancel it. |
 | `$POS,...`              | At the `STREAM` rate |
 | `$ERR,BUS`              | When a slew write fails (see §5.4) |
@@ -194,15 +258,19 @@ Hobby servos have no feedback. The reported position is the **commanded pulse** 
 
 - `owlet.protocol`: encode, decode and checksum (no I/O; unit-tested against `docs/protocol_vectors.txt`, the same file the C++ tests read).
 - `owlet.client.Owlet`: high-level API (`ping()`, `enable()`, `move()`, `position()`, `stream()`, ...) that waits for `$READY` and matches replies by name.
+- `owlet.tracking`: the pieces of a tracking loop.
+  - `Tracker(head)`: background reader with a 50 Hz `$POS` stream, clock sync, `set_rates()` (sends `VEL` without waiting for each ACK), `pose_at(host_time)` interpolation and a watchdog-friendly refresh.
+  - `PixelController`: turns a detection's pixel offset into pan/tilt rates using the camera's field of view, a gain, a deadband and a rate limit.
+  - `examples/track_object.py`: a webcam + YOLO loop built on these. It is optional and needs `opencv-python` and `ultralytics`, which the library itself doesn't depend on.
 - `owlet` / `python -m owlet`: a CLI (`owlet move 30 -15 --wait`, `owlet pos`, `owlet watch`, `owlet shell`). The port is auto-detected by Espressif's USB VID (`0x303A`).
 
 Opening the port: on Linux (verified on hardware, 2026-10-01), opening the USB-Serial-JTAG port with pyserial's defaults (DTR/RTS asserted) does **not** reset the chip. Toggling DTR/RTS individually can, because that is the auto-reset signal `esptool` uses. Clients shouldn't touch the modem lines.
 
-`apps/host-sim/owlet_sim` runs the real `CommandProcessor` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it.
+`apps/host-sim/owlet_sim` runs the real `ControlLoop` + `NmeaProtocol` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it.
 
 ## 8. Testing strategy
 
-- **Unit (GTest):** Servo, Checksum, LineFramer, request parsing, reply formatting, PanTilt and CommandProcessor (fake serial + fake clock).
+- **Unit (GTest):** Servo, the NMEA codec (checksum, framer, parser, writer), PanTilt, ProtocolMux and ControlLoop (with fake protocols, tickers and ports), and NmeaProtocol (fake serial + fake clock).
 - **Integration (GTest):** the real driver stack over `VirtualI2CBus` + `PCA9685Simulator`, asserting on the PWM counts the chip would output.
 - **Cross-language:** C++ and Python both validate `docs/protocol_vectors.txt`.
 - **End-to-end:** the Python client drives `owlet_sim` over a pty.

@@ -1,12 +1,16 @@
-// Whole firmware stack on the host: CommandProcessor → PanTilt → Servo →
+// Whole firmware stack on the host: ControlLoop → ProtocolMux → NmeaProtocol →
+// PanTilt → Servo →
 // PCA9685 driver → VirtualI2CBus → PCA9685Simulator. Asserts on the PWM
 // counts the real chip would be driving.
 
 #include "FakeSerialPort.hpp"
-#include "owlet/core/CommandProcessor.hpp"
+#include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/PanTilt.hpp"
+#include "owlet/core/ProtocolMux.hpp"
+#include "owlet/nmea/NmeaProtocol.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
-#include "owlet/protocol/LineWriter.hpp"
+#include "owlet/nmea/LineWriter.hpp"
 #include "owlet/sim/PCA9685Simulator.hpp"
 #include "owlet/sim/VirtualI2CBus.hpp"
 
@@ -16,7 +20,9 @@
 
 using ::owlet::PCA9685;
 using ::owlet::Servo;
-using ::owlet::core::CommandProcessor;
+using ::owlet::core::ControlLoop;
+using ::owlet::core::ProtocolMux;
+using ::owlet::nmea::NmeaProtocol;
 using ::owlet::core::PanTilt;
 
 namespace
@@ -31,7 +37,7 @@ public:
 
 std::string frame(const std::string& body)
 {
-    ::owlet::protocol::LineWriter w;
+    ::owlet::nmea::LineWriter w;
     w.beginRaw(body);
     return std::string(w.finish());
 }
@@ -80,7 +86,9 @@ protected:
     Servo                          tilt{tiltCh, Servo::Calibration{}};
     PanTilt                        head{pan, tilt};
     ::owlet::test::FakeSerialPort  port;
-    CommandProcessor               proc{port, head, "test"};
+    NmeaProtocol                   nmea{port, head, "test"};
+    ProtocolMux<1>                 mux{{&nmea}};
+    ControlLoop                    proc{port, head, mux};
     uint32_t                       now{0};
 };
 

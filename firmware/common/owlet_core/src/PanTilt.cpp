@@ -111,12 +111,14 @@ PanTilt::Result PanTilt::setSpeed(float degPerSec)
     return Result::Ok;
 }
 
-bool PanTilt::tick(uint32_t dtMs)
+TickStatus PanTilt::tick(uint32_t dtMs)
 {
     // Tick both even if one fails so a single bad axis can't freeze the other.
     const bool panOk  = m_pan.tick(dtMs);
     const bool tiltOk = m_tilt.tick(dtMs);
-    return panOk && tiltOk;
+    TickStatus status;
+    status.busOk = panOk && tiltOk;
+    return status;
 }
 
 // ── Introspection ───────────────────────────────────────────────────────────
@@ -128,6 +130,26 @@ PanTilt::State PanTilt::state() const
         return State::Disabled;
     }
     return (m_pan.moving() || m_tilt.moving()) ? State::Moving : State::Holding;
+}
+
+PanTilt::Pose PanTilt::position() const
+{
+    return Pose{m_pan.positionDeg(), m_tilt.positionDeg()};
+}
+
+PanTilt::Pose PanTilt::target() const
+{
+    return Pose{m_pan.targetDeg(), m_tilt.targetDeg()};
+}
+
+float PanTilt::speed() const
+{
+    return m_pan.speed();
+}
+
+PanTilt::Limits PanTilt::limits() const
+{
+    return Limits{m_pan.minDeg(), m_pan.maxDeg(), m_tilt.minDeg(), m_tilt.maxDeg()};
 }
 
 bool PanTilt::inLimits(const Servo& s, float deg)

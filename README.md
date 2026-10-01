@@ -335,7 +335,7 @@ Everything below runs inside `nix develop`.
 Run one test suite or test:
 
 ```bash
-ctest --test-dir build/host -R CommandProcessor --output-on-failure
+ctest --test-dir build/host -R NmeaProtocol --output-on-failure
 build/host/tests/owlet_servo_test --gtest_filter='Servo.Slew*'
 cd tools/python && python -m unittest tests.test_protocol
 ```
@@ -360,8 +360,8 @@ owlet/
 │   ├── owlet_pca9685/      PCA9685 PWM driver
 │   └── owlet_servo/        servo model: angle↔pulse, speed-limited motion
 ├── firmware/common/
-│   ├── owlet_protocol/     framing, checksum, parsing, reply formatting
-│   └── owlet_core/         PanTilt motion model + CommandProcessor (all behaviour)
+│   ├── owlet_core/         interfaces (IPanTilt, IProtocol), PanTilt, ControlLoop, ProtocolMux
+│   └── owlet_nmea/         the native protocol: codec + NmeaProtocol
 ├── platform/owlet_esp32/   ESP-IDF implementations of the hardware interfaces
 ├── simulators/             virtual I²C bus + register-level PCA9685 model
 ├── tests/                  GoogleTest suites
@@ -407,7 +407,7 @@ Issues and pull requests are welcome. Before opening a PR:
 
 1. Run `./build.py --host -t`; every test must pass.
 2. Add or update tests for any behaviour you change. All device behaviour lives in `firmware/common/` so it can be tested on a PC.
-3. If you change the protocol, update the firmware (`owlet_protocol`, `CommandProcessor`), the Python client, and `docs/DESIGN.md` §5 together.
+3. If you change the native protocol, update the firmware (`owlet_nmea`), the Python client, and `docs/DESIGN.md` §5 together.
 4. Keep firmware code free of dynamic allocation, exceptions and RTTI, following the existing style (C++17, Allman braces, `m_` member prefix).
 
 ## License

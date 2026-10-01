@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::protocol
+namespace owlet::nmea
 {
 
 enum class FrameStatus : uint8_t
@@ -30,4 +30,4 @@ struct Sentence
 // `frame` is '$' through the two checksum digits, without CR/LF.
 [[nodiscard]] FrameStatus decodeSentence(std::string_view frame, Sentence& out);
 
-} // namespace owlet::protocol
+} // namespace owlet::nmea

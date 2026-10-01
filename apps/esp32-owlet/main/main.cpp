@@ -4,9 +4,10 @@
 // and runs the 100 Hz service loop. All behaviour lives in
 // firmware/common/owlet_core (host-tested); nothing here makes decisions.
 
-#include "owlet/core/CommandProcessor.hpp"
+#include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
+#include "owlet/nmea/NmeaProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
 #include "owlet/platform/esp32/Esp32Delay.hpp"
 #include "owlet/platform/esp32/Esp32I2CBus.hpp"
@@ -102,13 +103,16 @@ extern "C" void app_main(void)
     static Servo                  pan(panCh, kPanCal);
     static Servo                  tilt(tiltCh, kTiltCal);
     static ::owlet::core::PanTilt head(pan, tilt);
-    static ::owlet::core::CommandProcessor proc(usb, head, ::owlet::core::kFirmwareVersion);
+    // Protocols are plug-ins: to add your own, construct it here and combine
+    // them with core::ProtocolMux (docs/DESIGN.md §4.4).
+    static ::owlet::nmea::NmeaProtocol protocol(usb, head, ::owlet::core::kFirmwareVersion);
+    static ::owlet::core::ControlLoop  loop(usb, head, protocol);
 
-    proc.begin(millis());
+    loop.begin(millis());
     TickType_t wake = xTaskGetTickCount();
     for (;;)
     {
-        proc.service(millis());
+        loop.service(millis());
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(kLoopPeriodMs));
     }
 }

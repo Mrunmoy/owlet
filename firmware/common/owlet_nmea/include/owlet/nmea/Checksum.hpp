@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::protocol
+namespace owlet::nmea
 {
 
 inline constexpr uint8_t kProtocolVersion = 1;
@@ -27,4 +27,4 @@ inline constexpr std::size_t kMaxFrameLen = kMaxLineLen - 2;
 
 static_assert(checksum("PING") == 0x10, "checksum must match the protocol vectors");
 
-} // namespace owlet::protocol
+} // namespace owlet::nmea

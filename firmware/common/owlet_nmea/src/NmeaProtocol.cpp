@@ -1,62 +1,77 @@
-#include "owlet/core/CommandProcessor.hpp"
+#include "owlet/nmea/NmeaProtocol.hpp"
 
-#include "owlet/protocol/Sentence.hpp"
+#include "owlet/nmea/Sentence.hpp"
 
 #include <array>
 
-namespace owlet::core
+namespace owlet::nmea
 {
 
-using ::owlet::protocol::Command;
-using ::owlet::protocol::FrameStatus;
-using ::owlet::protocol::LineFramer;
-using ::owlet::protocol::Request;
-using ::owlet::protocol::RequestStatus;
-using ::owlet::protocol::Sentence;
+using ::owlet::core::ConsumeResult;
+using ::owlet::core::IPanTilt;
+using ::owlet::core::TickStatus;
 
-CommandProcessor::CommandProcessor(::owlet::hal::ISerialPort& port,
-                                   PanTilt&                   head,
-                                   std::string_view           firmwareVersion)
-    : m_port(port), m_head(head), m_firmwareVersion(firmwareVersion)
+NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink& out,
+                           IPanTilt&                head,
+                           std::string_view         firmwareVersion)
+    : m_out(out), m_head(head), m_firmwareVersion(firmwareVersion)
 {
 }
 
-void CommandProcessor::begin(uint32_t nowMs)
+// ── IProtocol ───────────────────────────────────────────────────────────────
+
+bool NmeaProtocol::claims(uint8_t byte, bool /*atLineStart*/) const
 {
-    m_lastTickMs = nowMs;
+    // '$' starts a frame anywhere, so a garbled line resyncs on the next one.
+    return byte == '$';
+}
+
+ConsumeResult NmeaProtocol::consume(const uint8_t* data, std::size_t len)
+{
+    for (std::size_t i = 0; i < len; ++i)
+    {
+        switch (m_framer.push(data[i]))
+        {
+        case LineFramer::Event::Frame:
+            handleFrame(m_framer.frame());
+            break;
+        case LineFramer::Event::Overflow:
+            sendErr("LEN");
+            break;
+        case LineFramer::Event::None:
+            break;
+        }
+        if (data[i] == '\r' || data[i] == '\n')
+        {
+            return {i + 1, true};
+        }
+    }
+    return {len, false};
+}
+
+void NmeaProtocol::begin(uint32_t nowMs)
+{
+    m_nowMs = nowMs;
     sendVersioned("READY");
 }
 
-void CommandProcessor::service(uint32_t nowMs)
+void NmeaProtocol::onTick(uint32_t nowMs, const TickStatus& status)
 {
-    tickMotion(nowMs);
-    pumpInput();
-}
+    m_nowMs = nowMs;
 
-// ── Motion + unsolicited events ─────────────────────────────────────────────
-
-void CommandProcessor::tickMotion(uint32_t nowMs)
-{
-    uint32_t dt = nowMs - m_lastTickMs;  // unsigned: wraps correctly
-    m_lastTickMs = nowMs;
-    if (dt > kMaxTickMs)
-    {
-        dt = kMaxTickMs;
-    }
-
-    const bool ok = m_head.tick(dt);
-    if (!ok && !m_busFault)
+    if (!status.busOk && !m_busFault)
     {
         sendErr("BUS");
     }
-    m_busFault = !ok;
+    m_busFault = !status.busOk;
 
-    if (m_awaitingArrival && m_head.state() == PanTilt::State::Holding)
+    if (m_awaitingArrival && m_head.state() == IPanTilt::State::Holding)
     {
         m_awaitingArrival = false;
+        const IPanTilt::Pose p = m_head.position();
         m_writer.begin("ARRIVED");
-        m_writer.fixed1(m_head.panDeg());
-        m_writer.fixed1(m_head.tiltDeg());
+        m_writer.fixed1(p.pan);
+        m_writer.fixed1(p.tilt);
         flush();
     }
 
@@ -72,35 +87,12 @@ void CommandProcessor::tickMotion(uint32_t nowMs)
     }
 }
 
-// ── Input ───────────────────────────────────────────────────────────────────
+// ── Request handling ────────────────────────────────────────────────────────
 
-void CommandProcessor::pumpInput()
-{
-    std::array<uint8_t, kReadChunk> chunk{};
-    for (std::size_t n = m_port.read(chunk.data(), chunk.size()); n != 0;
-         n             = m_port.read(chunk.data(), chunk.size()))
-    {
-        for (std::size_t i = 0; i < n; ++i)
-        {
-            switch (m_framer.push(chunk[i]))
-            {
-            case LineFramer::Event::Frame:
-                handleFrame(m_framer.frame());
-                break;
-            case LineFramer::Event::Overflow:
-                sendErr("LEN");
-                break;
-            case LineFramer::Event::None:
-                break;
-            }
-        }
-    }
-}
-
-void CommandProcessor::handleFrame(std::string_view frame)
+void NmeaProtocol::handleFrame(std::string_view frame)
 {
     Sentence sentence;
-    switch (::owlet::protocol::decodeSentence(frame, sentence))
+    switch (decodeSentence(frame, sentence))
     {
     case FrameStatus::Ok:
         break;
@@ -113,7 +105,7 @@ void CommandProcessor::handleFrame(std::string_view frame)
     }
 
     Request req;
-    switch (::owlet::protocol::parseRequest(sentence, req))
+    switch (parseRequest(sentence, req))
     {
     case RequestStatus::Ok:
         execute(req);
@@ -127,7 +119,7 @@ void CommandProcessor::handleFrame(std::string_view frame)
     }
 }
 
-void CommandProcessor::execute(const Request& req)
+void NmeaProtocol::execute(const Request& req)
 {
     switch (req.command)
     {
@@ -153,8 +145,8 @@ void CommandProcessor::execute(const Request& req)
         return;
     case Command::Stop:
     {
-        const PanTilt::Result r = m_head.stop();
-        if (r == PanTilt::Result::Ok)
+        const Result r = m_head.stop();
+        if (r == Result::Ok)
         {
             m_awaitingArrival = false;
         }
@@ -183,97 +175,102 @@ void CommandProcessor::execute(const Request& req)
             return;
         }
         m_streamPeriodMs = (hz == 0) ? 0 : 1000U / hz;
-        m_nextStreamMs   = m_lastTickMs + m_streamPeriodMs;
+        m_nextStreamMs   = m_nowMs + m_streamPeriodMs;
         sendAck(req.command);
         return;
     }
     case Command::Limits:
+    {
+        const IPanTilt::Limits lim = m_head.limits();
         m_writer.begin("LIMITS");
-        m_writer.fixed1(m_head.panServo().minDeg());
-        m_writer.fixed1(m_head.panServo().maxDeg());
-        m_writer.fixed1(m_head.tiltServo().minDeg());
-        m_writer.fixed1(m_head.tiltServo().maxDeg());
+        m_writer.fixed1(lim.panMin);
+        m_writer.fixed1(lim.panMax);
+        m_writer.fixed1(lim.tiltMin);
+        m_writer.fixed1(lim.tiltMax);
         flush();
         return;
+    }
     }
 }
 
 // ── Replies ─────────────────────────────────────────────────────────────────
 
-void CommandProcessor::sendResult(Command cmd, PanTilt::Result result)
+void NmeaProtocol::sendResult(Command cmd, Result result)
 {
     switch (result)
     {
-    case PanTilt::Result::Ok:
+    case Result::Ok:
         // Every accepted motion request earns exactly one ARRIVED, even when
         // the target equals the position, so clients can always wait on it.
         if (cmd == Command::Move || cmd == Command::Nudge || cmd == Command::Home ||
-            (cmd == Command::Enable && m_head.state() == PanTilt::State::Moving))
+            (cmd == Command::Enable && m_head.state() == IPanTilt::State::Moving))
         {
             m_awaitingArrival = true;
         }
         sendAck(cmd);
         return;
-    case PanTilt::Result::Range:
+    case Result::Range:
         sendNak(cmd, "RNG");
         return;
-    case PanTilt::Result::Disabled:
+    case Result::Disabled:
         sendNak(cmd, "DIS");
         return;
-    case PanTilt::Result::Bus:
+    case Result::Bus:
         sendNak(cmd, "BUS");
         return;
     }
 }
 
-void CommandProcessor::sendPos()
+void NmeaProtocol::sendPos()
 {
     static constexpr std::array<std::string_view, 3> kStateCodes{"D", "M", "H"};
+    const IPanTilt::Pose p = m_head.position();
+    const IPanTilt::Pose t = m_head.target();
     m_writer.begin("POS");
-    m_writer.fixed1(m_head.panDeg());
-    m_writer.fixed1(m_head.tiltDeg());
-    m_writer.fixed1(m_head.panTargetDeg());
-    m_writer.fixed1(m_head.tiltTargetDeg());
+    m_writer.fixed1(p.pan);
+    m_writer.fixed1(p.tilt);
+    m_writer.fixed1(t.pan);
+    m_writer.fixed1(t.tilt);
     m_writer.field(kStateCodes[static_cast<std::size_t>(m_head.state())]);
     flush();
 }
 
-void CommandProcessor::sendAck(Command cmd)
+void NmeaProtocol::sendAck(Command cmd)
 {
     m_writer.begin("ACK");
-    m_writer.field(::owlet::protocol::commandName(cmd));
+    m_writer.field(commandName(cmd));
     flush();
 }
 
-void CommandProcessor::sendNak(Command cmd, std::string_view code)
+void NmeaProtocol::sendNak(Command cmd, std::string_view code)
 {
     m_writer.begin("NAK");
-    m_writer.field(::owlet::protocol::commandName(cmd));
+    m_writer.field(commandName(cmd));
     m_writer.field(code);
     flush();
 }
 
-void CommandProcessor::sendErr(std::string_view code)
+void NmeaProtocol::sendErr(std::string_view code)
 {
     m_writer.begin("ERR");
     m_writer.field(code);
     flush();
 }
 
-void CommandProcessor::sendVersioned(std::string_view name)
+void NmeaProtocol::sendVersioned(std::string_view name)
 {
     m_writer.begin(name);
-    m_writer.uint(::owlet::protocol::kProtocolVersion);
+    m_writer.uint(kProtocolVersion);
     m_writer.field(m_firmwareVersion);
     flush();
 }
 
-void CommandProcessor::flush()
+void NmeaProtocol::flush()
 {
     const std::string_view line = m_writer.finish();
     // A refused write means no host is listening; dropping the line is the
     // correct behaviour for a stateless line protocol.
-    (void) m_port.write(line.data(), line.size());
+    (void) m_out.write(line.data(), line.size());
 }
 
-} // namespace owlet::core
+} // namespace owlet::nmea

@@ -56,7 +56,7 @@ TEST(PanTilt, EnableAtPoseSnapsBothAxes)
     ASSERT_EQ(r.head.enableAt(45.0f, -45.0f), Result::Ok);
     EXPECT_EQ(r.panCh.lastPulseUs, 2000);
     EXPECT_EQ(r.tiltCh.lastPulseUs, 1000);
-    EXPECT_FLOAT_EQ(r.head.panDeg(), 45.0f);
+    EXPECT_FLOAT_EQ(r.head.position().pan, 45.0f);
 }
 
 TEST(PanTilt, EnableAtOutOfRangeIsRejectedWithoutMotion)
@@ -75,7 +75,7 @@ TEST(PanTilt, EnableAtWhileEnabledSlewsInsteadOfSnapping)
     ASSERT_EQ(r.head.enableAt(60.0f, 0.0f), Result::Ok);
     EXPECT_EQ(r.panCh.writes.size(), writes);  // no immediate jump
     EXPECT_EQ(r.head.state(), State::Moving);
-    EXPECT_FLOAT_EQ(r.head.panTargetDeg(), 60.0f);
+    EXPECT_FLOAT_EQ(r.head.target().pan, 60.0f);
 }
 
 TEST(PanTilt, ReEnableAfterMidMoveDisableUsesPositionNotTarget)
@@ -84,11 +84,11 @@ TEST(PanTilt, ReEnableAfterMidMoveDisableUsesPositionNotTarget)
     ASSERT_EQ(r.head.enable(), Result::Ok);
     ASSERT_EQ(r.head.setSpeed(100.0f), Result::Ok);
     ASSERT_EQ(r.head.move(80.0f, 0.0f), Result::Ok);
-    ASSERT_TRUE(r.head.tick(200));  // pan at 20°
+    ASSERT_TRUE(r.head.tick(200).busOk);  // pan at 20°
     ASSERT_EQ(r.head.disable(), Result::Ok);
     EXPECT_TRUE(r.panCh.idle);
     ASSERT_EQ(r.head.enable(), Result::Ok);
-    EXPECT_NEAR(r.head.panDeg(), 20.0f, 1e-3f);
+    EXPECT_NEAR(r.head.position().pan, 20.0f, 1e-3f);
     EXPECT_EQ(r.head.state(), State::Holding);
 }
 
@@ -107,11 +107,11 @@ TEST(PanTilt, MoveSlewsBothAxesIndependently)
     ASSERT_EQ(r.head.enable(), Result::Ok);
     ASSERT_EQ(r.head.setSpeed(100.0f), Result::Ok);
     ASSERT_EQ(r.head.move(30.0f, -10.0f), Result::Ok);
-    ASSERT_TRUE(r.head.tick(100));
-    EXPECT_NEAR(r.head.panDeg(), 10.0f, 1e-3f);
-    EXPECT_NEAR(r.head.tiltDeg(), -10.0f, 1e-3f);  // tilt already arrived
+    ASSERT_TRUE(r.head.tick(100).busOk);
+    EXPECT_NEAR(r.head.position().pan, 10.0f, 1e-3f);
+    EXPECT_NEAR(r.head.position().tilt, -10.0f, 1e-3f);  // tilt already arrived
     EXPECT_EQ(r.head.state(), State::Moving);
-    ASSERT_TRUE(r.head.tick(200));
+    ASSERT_TRUE(r.head.tick(200).busOk);
     EXPECT_EQ(r.head.state(), State::Holding);
 }
 
@@ -121,10 +121,10 @@ TEST(PanTilt, NudgeIsRelativeToTargetAndClamps)
     ASSERT_EQ(r.head.enable(), Result::Ok);
     ASSERT_EQ(r.head.move(80.0f, 0.0f), Result::Ok);
     ASSERT_EQ(r.head.nudge(5.0f, -3.0f), Result::Ok);
-    EXPECT_FLOAT_EQ(r.head.panTargetDeg(), 85.0f);
-    EXPECT_FLOAT_EQ(r.head.tiltTargetDeg(), -3.0f);
+    EXPECT_FLOAT_EQ(r.head.target().pan, 85.0f);
+    EXPECT_FLOAT_EQ(r.head.target().tilt, -3.0f);
     ASSERT_EQ(r.head.nudge(50.0f, 0.0f), Result::Ok);
-    EXPECT_FLOAT_EQ(r.head.panTargetDeg(), 90.0f);
+    EXPECT_FLOAT_EQ(r.head.target().pan, 90.0f);
 }
 
 TEST(PanTilt, HomeTargetsCenter)
@@ -132,8 +132,8 @@ TEST(PanTilt, HomeTargetsCenter)
     Rig r;
     ASSERT_EQ(r.head.enableAt(40.0f, 40.0f), Result::Ok);
     ASSERT_EQ(r.head.home(), Result::Ok);
-    EXPECT_FLOAT_EQ(r.head.panTargetDeg(), 0.0f);
-    EXPECT_FLOAT_EQ(r.head.tiltTargetDeg(), 0.0f);
+    EXPECT_FLOAT_EQ(r.head.target().pan, 0.0f);
+    EXPECT_FLOAT_EQ(r.head.target().tilt, 0.0f);
 }
 
 TEST(PanTilt, StopFreezesWhereItIs)
@@ -142,10 +142,10 @@ TEST(PanTilt, StopFreezesWhereItIs)
     ASSERT_EQ(r.head.enable(), Result::Ok);
     ASSERT_EQ(r.head.setSpeed(100.0f), Result::Ok);
     ASSERT_EQ(r.head.move(50.0f, 50.0f), Result::Ok);
-    ASSERT_TRUE(r.head.tick(150));
+    ASSERT_TRUE(r.head.tick(150).busOk);
     ASSERT_EQ(r.head.stop(), Result::Ok);
     EXPECT_EQ(r.head.state(), State::Holding);
-    EXPECT_NEAR(r.head.panTargetDeg(), 15.0f, 1e-3f);
+    EXPECT_NEAR(r.head.target().pan, 15.0f, 1e-3f);
 }
 
 TEST(PanTilt, SpeedRangeIsValidated)
@@ -166,4 +166,44 @@ TEST(PanTilt, EnableBusFailureLeavesBothAxesLimp)
     EXPECT_EQ(r.head.enable(), Result::Bus);
     EXPECT_EQ(r.head.state(), State::Disabled);
     EXPECT_TRUE(r.panCh.idle);
+}
+
+TEST(PanTilt, ReportsLimitsFromServos)
+{
+    FakeServoChannel   a;
+    FakeServoChannel   b;
+    Servo::Calibration panCal;
+    panCal.minDeg = -60.0f;
+    panCal.maxDeg = 70.0f;
+    Servo::Calibration tiltCal;
+    tiltCal.minDeg = -30.0f;
+    Servo   pan{a, panCal};
+    Servo   tilt{b, tiltCal};
+    PanTilt head{pan, tilt};
+    const PanTilt::Limits lim = head.limits();
+    EXPECT_FLOAT_EQ(lim.panMin, -60.0f);
+    EXPECT_FLOAT_EQ(lim.panMax, 70.0f);
+    EXPECT_FLOAT_EQ(lim.tiltMin, -30.0f);
+    EXPECT_FLOAT_EQ(lim.tiltMax, 90.0f);
+}
+
+TEST(PanTilt, TickReportsBusFault)
+{
+    Rig r;
+    ASSERT_EQ(r.head.enable(), Result::Ok);
+    ASSERT_EQ(r.head.move(10.0f, 0.0f), Result::Ok);
+    r.panCh.failNext = true;
+    EXPECT_FALSE(r.head.tick(20).busOk);
+    EXPECT_TRUE(r.head.tick(20).busOk);
+}
+
+TEST(PanTilt, UsableThroughInterfaces)
+{
+    Rig                         r;
+    ::owlet::core::IPanTilt&    control = r.head;
+    ::owlet::core::ITickable&   motion  = r.head;
+    ASSERT_EQ(control.enable(), Result::Ok);
+    ASSERT_EQ(control.move(5.0f, 0.0f), Result::Ok);
+    EXPECT_TRUE(motion.tick(1000).busOk);
+    EXPECT_FLOAT_EQ(control.position().pan, 5.0f);
 }

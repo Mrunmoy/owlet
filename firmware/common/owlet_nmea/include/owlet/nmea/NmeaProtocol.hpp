@@ -1,5 +1,6 @@
 #pragma once
 
+#include "owlet/core/ICalibration.hpp"
 #include "owlet/core/IPanTilt.hpp"
 #include "owlet/core/IProtocol.hpp"
 #include "owlet/hal/IByteSink.hpp"
@@ -24,10 +25,11 @@ public:
 
     // `clock` stamps $CLOCK replies; $POS is stamped with the tick time of
     // the pose it reports.
-    NmeaProtocol(::owlet::hal::IByteSink&    out,
-                 ::owlet::core::IPanTilt&    head,
-                 const ::owlet::hal::IClock& clock,
-                 std::string_view            firmwareVersion);
+    NmeaProtocol(::owlet::hal::IByteSink&      out,
+                 ::owlet::core::IPanTilt&      head,
+                 ::owlet::core::ICalibration&  calibration,
+                 const ::owlet::hal::IClock&   clock,
+                 std::string_view              firmwareVersion);
 
     NmeaProtocol(const NmeaProtocol&)            = delete;
     NmeaProtocol& operator=(const NmeaProtocol&) = delete;
@@ -52,10 +54,13 @@ private:
     void sendErr(std::string_view code);
     void sendResult(Command cmd, Result result);
     void sendVersioned(std::string_view name);
+    void executeCal(const Request& req);
+    void sendCal(::owlet::core::Axis axis, std::string_view name);
     void flush();
 
     ::owlet::hal::IByteSink& m_out;
     ::owlet::core::IPanTilt& m_head;
+    ::owlet::core::ICalibration& m_calibration;
     const ::owlet::hal::IClock& m_clock;
     std::string_view         m_firmwareVersion;
     LineFramer               m_framer;

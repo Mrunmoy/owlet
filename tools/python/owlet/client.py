@@ -12,13 +12,26 @@ from serial.tools import list_ports
 
 from .protocol import (
     PROTOCOL_VERSION,
+    AxisCalibration,
+    Capabilities,
     Position,
     ProtocolError,
     Sentence,
     decode,
     encode,
+    parse_calibration,
+    parse_caps,
     parse_position,
 )
+
+_AXES = ("pan", "tilt")
+
+
+def _axis(name: str) -> str:
+    a = name.lower()
+    if a not in _AXES:
+        raise ValueError(f"axis must be 'pan' or 'tilt', not {name!r}")
+    return a
 
 ESPRESSIF_VID = 0x303A
 
@@ -159,6 +172,52 @@ class Owlet:
     def limits(self) -> tuple[float, float, float, float]:
         f = self.request("LIMITS", expect="LIMITS").fields
         return float(f[0]), float(f[1]), float(f[2]), float(f[3])
+
+    # ── capabilities and calibration (protocol v3) ────────────────────────
+
+    def caps(self) -> Capabilities:
+        """Motion capabilities: speed, velocity, watchdog and stream ranges."""
+        return parse_caps(self.request("CAPS", expect="CAPS"))
+
+    def calibration(self, axis: str) -> AxisCalibration:
+        """The calibration stored on the device for 'pan' or 'tilt'."""
+        a = _axis(axis)
+        return parse_calibration(self.request("CAL", a.upper(), expect="CAL"))
+
+    def set_calibration(self, axis: str, min_us: int, center_us: int, max_us: int,
+                        min_deg: float, max_deg: float) -> None:
+        """Replace an axis's calibration (in RAM; ``save_calibration`` persists).
+
+        Changing the pulses requires the servos to be disabled (error code
+        ``ENA``); changing only the limits works at any time.
+        """
+        self._ack("CAL", _axis(axis).upper(), int(min_us), int(center_us), int(max_us),
+                  min_deg, max_deg)
+
+    def set_limits(self, axis: str, min_deg: float, max_deg: float) -> None:
+        """Change only the soft limits of an axis (allowed while enabled)."""
+        c = self.calibration(axis)
+        self.set_calibration(axis, c.min_us, c.center_us, c.max_us, min_deg, max_deg)
+
+    def set_reversed(self, axis: str, reversed_: bool) -> None:
+        """Make + go the other way (servos must be disabled). Does nothing if
+        the axis is already in that state.
+
+        Swaps the pulse endpoints *and mirrors the limits*, so the soft limits
+        keep protecting the same physical end stops.
+        """
+        c = self.calibration(axis)
+        if c.reversed != reversed_:
+            self.set_calibration(axis, c.max_us, c.center_us, c.min_us, -c.max_deg, -c.min_deg)
+
+    def save_calibration(self) -> None:
+        """Store both axes' calibration in the device's flash."""
+        self._ack("CAL", "SAVE")
+
+    def reset_calibration(self) -> None:
+        """Restore factory calibration and erase the saved copy (servos must be
+        disabled)."""
+        self._ack("CAL", "RESET")
 
     def stream(self, hz: int) -> None:
         self._ack("STREAM", int(hz))

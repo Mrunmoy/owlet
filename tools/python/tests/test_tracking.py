@@ -302,6 +302,18 @@ class TrackerRobustnessTest(unittest.TestCase):  # review M3, M4, L6, H2
         self.assertEqual(len(tr.history), 0)
         tr.stop()
 
+    def test_rates_are_clamped_to_the_reported_velocity_limit(self):
+        def respond(s):
+            if s.name == "CAPS":
+                return ["CAPS,1.0,500.0,120.0,50,5000,50"]  # a slower head
+            return default_responder(s)
+        fake = FakeSerial(respond)
+        tr = Tracker(Owlet(transport=fake))
+        tr.start()
+        tr.set_rates(300, -300)
+        self.assertIn("$VEL,120,-120", fake.sent("VEL")[-1])
+        tr.stop()
+
     def test_rates_are_clamped_to_the_device_limit(self):
         fake, head, tr = self.make()
         tr.start()

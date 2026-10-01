@@ -11,11 +11,16 @@ using ::owlet::core::ConsumeResult;
 using ::owlet::core::IPanTilt;
 using ::owlet::core::TickStatus;
 
-NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink&    out,
-                           IPanTilt&                   head,
-                           const ::owlet::hal::IClock& clock,
-                           std::string_view            firmwareVersion)
-    : m_out(out), m_head(head), m_clock(clock), m_firmwareVersion(firmwareVersion)
+NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink&     out,
+                           IPanTilt&                    head,
+                           ::owlet::core::ICalibration& calibration,
+                           const ::owlet::hal::IClock&  clock,
+                           std::string_view             firmwareVersion)
+    : m_out(out),
+      m_head(head),
+      m_calibration(calibration),
+      m_clock(clock),
+      m_firmwareVersion(firmwareVersion)
 {
 }
 
@@ -155,7 +160,7 @@ void NmeaProtocol::execute(const Request& req)
         // Only ENABLE,<pan>,<tilt> on an already-powered head is a move (and
         // earns ARRIVED); from disabled it is a snap, and bare ENABLE moves nothing.
         const bool   wasEnabled = m_head.state() != IPanTilt::State::Disabled;
-        const Result r = req.argCount == 2 ? m_head.enableAt(req.a, req.b) : m_head.enable();
+        const Result r = req.argCount == 2 ? m_head.enableAt(req.args[0], req.args[1]) : m_head.enable();
         if (r == Result::Ok && req.argCount == 2 && wasEnabled)
         {
             m_awaitingArrival = true;
@@ -168,10 +173,10 @@ void NmeaProtocol::execute(const Request& req)
         sendResult(req.command, m_head.disable());
         return;
     case Command::Move:
-        sendResult(req.command, m_head.move(req.a, req.b));
+        sendResult(req.command, m_head.move(req.args[0], req.args[1]));
         return;
     case Command::Nudge:
-        sendResult(req.command, m_head.nudge(req.a, req.b));
+        sendResult(req.command, m_head.nudge(req.args[0], req.args[1]));
         return;
     case Command::Home:
         sendResult(req.command, m_head.home());
@@ -194,14 +199,14 @@ void NmeaProtocol::execute(const Request& req)
             flush();
             return;
         }
-        sendResult(req.command, m_head.setSpeed(req.a));
+        sendResult(req.command, m_head.setSpeed(req.args[0]));
         return;
     case Command::Pos:
         sendPos();
         return;
     case Command::Stream:
     {
-        const uint32_t hz = static_cast<uint32_t>(req.a);
+        const uint32_t hz = static_cast<uint32_t>(req.args[0]);
         if (hz > kMaxStreamHz)
         {
             sendNak(req.command, "RNG");
@@ -214,7 +219,7 @@ void NmeaProtocol::execute(const Request& req)
     }
     case Command::Vel:
     {
-        const Result r = m_head.setVelocity(req.a, req.b);
+        const Result r = m_head.setVelocity(req.args[0], req.args[1]);
         if (r == Result::Ok)
         {
             m_awaitingArrival = false;  // velocity mode never "arrives"
@@ -230,7 +235,7 @@ void NmeaProtocol::execute(const Request& req)
             flush();
             return;
         }
-        sendResult(req.command, m_head.setWatchdog(static_cast<uint32_t>(req.a)));
+        sendResult(req.command, m_head.setWatchdog(static_cast<uint32_t>(req.args[0])));
         return;
     case Command::Clock:
         // The live clock, not the tick time: this is the sample a host uses
@@ -238,6 +243,22 @@ void NmeaProtocol::execute(const Request& req)
         m_writer.begin("CLOCK");
         m_writer.uint(m_clock.nowMs());
         flush();
+        return;
+    case Command::Caps:
+    {
+        const IPanTilt::Capabilities c = m_head.capabilities();
+        m_writer.begin("CAPS");
+        m_writer.fixed1(c.speedMin);
+        m_writer.fixed1(c.speedMax);
+        m_writer.fixed1(c.velocityMax);
+        m_writer.uint(c.watchdogMinMs);
+        m_writer.uint(c.watchdogMaxMs);
+        m_writer.uint(kMaxStreamHz);
+        flush();
+        return;
+    }
+    case Command::Cal:
+        executeCal(req);
         return;
     case Command::Limits:
     {
@@ -251,6 +272,87 @@ void NmeaProtocol::execute(const Request& req)
         return;
     }
     }
+}
+
+// ── Calibration (v3) ────────────────────────────────────────────────────────
+
+void NmeaProtocol::executeCal(const Request& req)
+{
+    using ::owlet::core::Axis;
+    using CalResult = ::owlet::core::ICalibration::Result;
+
+    CalResult r = CalResult::Ok;
+    if (req.token == "SAVE")
+    {
+        r = m_calibration.save();
+    }
+    else if (req.token == "RESET")
+    {
+        r = m_calibration.reset();
+    }
+    else
+    {
+        const Axis axis = (req.token == "PAN") ? Axis::Pan : Axis::Tilt;
+        if (req.argCount == 0)
+        {
+            sendCal(axis, req.token);
+            return;
+        }
+        // Range-check before narrowing: 66036 would wrap to a valid 500 µs.
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            if (req.args[i] > 65535.0f)
+            {
+                sendNak(Command::Cal, "RNG");
+                return;
+            }
+        }
+        ::owlet::Servo::Calibration c;
+        c.minPulseUs    = static_cast<uint16_t>(req.args[0]);
+        c.centerPulseUs = static_cast<uint16_t>(req.args[1]);
+        c.maxPulseUs    = static_cast<uint16_t>(req.args[2]);
+        c.minDeg        = req.args[3];
+        c.maxDeg        = req.args[4];
+        r               = m_calibration.set(axis, c);
+    }
+
+    switch (r)
+    {
+    case CalResult::Ok:
+        sendAck(Command::Cal);
+        return;
+    case CalResult::Range:
+        sendNak(Command::Cal, "RNG");
+        return;
+    case CalResult::Enabled:
+        sendNak(Command::Cal, "ENA");
+        return;
+    case CalResult::Storage:
+        sendNak(Command::Cal, "STO");
+        return;
+    }
+}
+
+void NmeaProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
+{
+    using Source = ::owlet::core::ICalibration::Source;
+    static constexpr std::array<std::string_view, 3> kSourceCodes{"F", "S", "M"};
+    static_assert(static_cast<std::size_t>(Source::Factory) == 0 &&
+                      static_cast<std::size_t>(Source::Saved) == 1 &&
+                      static_cast<std::size_t>(Source::Modified) == 2,
+                  "kSourceCodes must follow ICalibration::Source");
+
+    const ::owlet::Servo::Calibration c = m_calibration.get(axis);
+    m_writer.begin("CAL");
+    m_writer.field(name);
+    m_writer.uint(c.minPulseUs);
+    m_writer.uint(c.centerPulseUs);
+    m_writer.uint(c.maxPulseUs);
+    m_writer.fixed1(c.minDeg);
+    m_writer.fixed1(c.maxDeg);
+    m_writer.field(c.minPulseUs > c.maxPulseUs ? "R" : "N");
+    m_writer.field(kSourceCodes[static_cast<std::size_t>(m_calibration.source())]);
+    flush();
 }
 
 // ── Replies ─────────────────────────────────────────────────────────────────

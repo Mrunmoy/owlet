@@ -34,6 +34,16 @@ public:
         float tilt;
     };
 
+    // What this head can do, for clients that adapt instead of probing.
+    struct Capabilities
+    {
+        float    speedMin;       // slew speed range for position moves, deg/s
+        float    speedMax;
+        float    velocityMax;    // |rate| limit in velocity mode, deg/s
+        uint32_t watchdogMinMs;  // non-zero watchdog range (0 = off is also allowed)
+        uint32_t watchdogMaxMs;
+    };
+
     struct Limits
     {
         float panMin;
@@ -84,6 +94,7 @@ public:
     [[nodiscard]] virtual Pose target() const = 0;
     [[nodiscard]] virtual float speed() const = 0;
     [[nodiscard]] virtual Limits limits() const = 0;
+    [[nodiscard]] virtual Capabilities capabilities() const = 0;
 };
 
 } // namespace owlet::core

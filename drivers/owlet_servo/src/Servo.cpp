@@ -15,6 +15,54 @@ Servo::Servo(::owlet::hal::IServoChannel& channel, Calibration cal)
     m_targetDeg   = m_positionDeg;
 }
 
+void Servo::setCalibration(const Calibration& cal)
+{
+    const bool pulsesChanged = cal.minPulseUs != m_cal.minPulseUs ||
+                               cal.centerPulseUs != m_cal.centerPulseUs ||
+                               cal.maxPulseUs != m_cal.maxPulseUs;
+    m_cal        = cal;
+    m_cal.minDeg = std::max(m_cal.minDeg, -kHalfSpanDeg);
+    m_cal.maxDeg = std::min(m_cal.maxDeg, kHalfSpanDeg);
+
+    if (pulsesChanged && m_lastPulseUs != 0)
+    {
+        m_positionDeg = pulseToAngle(m_lastPulseUs);  // same horn, new meaning
+        // A pulse beyond the new range has no angle: pulseToAngle saturates at
+        // ±90°, which would *look* valid. Treat the horn as unknown instead.
+        const uint16_t lo = std::min(m_cal.minPulseUs, m_cal.maxPulseUs);
+        const uint16_t hi = std::max(m_cal.minPulseUs, m_cal.maxPulseUs);
+        m_positionKnown   = m_lastPulseUs >= lo && m_lastPulseUs <= hi;
+    }
+    if (m_engaged && !positionInLimits())
+    {
+        stop();                                 // leave velocity mode...
+        m_targetDeg = clampDeg(m_positionDeg);  // ...and slew back inside
+    }
+    else if (!m_velocityMode)
+    {
+        m_targetDeg = clampDeg(m_targetDeg);
+    }
+}
+
+float Servo::pulseToAngle(uint16_t pulseUs) const
+{
+    const float p      = static_cast<float>(pulseUs);
+    const float center = static_cast<float>(m_cal.centerPulseUs);
+    const float upper  = static_cast<float>(m_cal.maxPulseUs) - center;  // +90° side
+    const float lower  = static_cast<float>(m_cal.minPulseUs) - center;  // -90° side
+    const float d      = p - center;
+    float       deg    = 0.0f;
+    if (upper != 0.0f && (d > 0.0f) == (upper > 0.0f) && d != 0.0f)
+    {
+        deg = kHalfSpanDeg * d / upper;
+    }
+    else if (lower != 0.0f && d != 0.0f)
+    {
+        deg = -kHalfSpanDeg * d / lower;
+    }
+    return std::clamp(deg, -kHalfSpanDeg, kHalfSpanDeg);
+}
+
 // ── Power ───────────────────────────────────────────────────────────────────
 
 bool Servo::engageAt(float deg)
@@ -25,10 +73,11 @@ bool Servo::engageAt(float deg)
     {
         return false;
     }
-    m_positionDeg = clamped;
-    m_targetDeg   = clamped;
-    m_lastPulseUs = pulse;
-    m_engaged     = true;
+    m_positionDeg   = clamped;
+    m_targetDeg     = clamped;
+    m_lastPulseUs   = pulse;
+    m_engaged       = true;
+    m_positionKnown = true;
     stop();  // a fresh engage never resumes an old velocity command
     return true;
 }
@@ -115,7 +164,20 @@ bool Servo::tick(uint32_t dtMs)
     float       next    = m_targetDeg;
     if (m_velocityMode)
     {
-        next = clampDeg(m_positionDeg + m_velocity * seconds);
+        // Step by at most |v|·dt toward the limit in the direction of travel:
+        // an axis that is outside its limits (e.g. they were just narrowed)
+        // must never be clamped across in one jump.
+        const float step = std::fabs(m_velocity) * seconds;
+        if (m_velocity > 0.0f)
+        {
+            next = (m_positionDeg >= m_cal.maxDeg) ? m_positionDeg
+                                                   : std::min(m_positionDeg + step, m_cal.maxDeg);
+        }
+        else
+        {
+            next = (m_positionDeg <= m_cal.minDeg) ? m_positionDeg
+                                                   : std::max(m_positionDeg - step, m_cal.minDeg);
+        }
     }
     else
     {

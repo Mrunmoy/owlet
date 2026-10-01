@@ -68,7 +68,7 @@ class DecodeTest(unittest.TestCase):
 
     def test_protocol_version_is_2(self):
         from owlet.protocol import PROTOCOL_VERSION
-        self.assertEqual(PROTOCOL_VERSION, 2)
+        self.assertEqual(PROTOCOL_VERSION, 3)
 
     def test_round_trip(self):
         frame = encode("NUDGE", 1.5, -2).decode()

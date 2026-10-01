@@ -5,6 +5,8 @@
 set(OWLET_CORE_SRCS
     src/PanTilt.cpp
     src/ControlLoop.cpp
+    src/Calibrator.cpp
+    src/CalibrationCodec.cpp
 )
 
 if(ESP_PLATFORM)

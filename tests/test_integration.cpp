@@ -3,8 +3,10 @@
 // PCA9685 driver → VirtualI2CBus → PCA9685Simulator. Asserts on the PWM
 // counts the real chip would be driving.
 
+#include "FakeCalibrationStore.hpp"
 #include "FakeClock.hpp"
 #include "FakeSerialPort.hpp"
+#include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/ProtocolMux.hpp"
@@ -51,6 +53,7 @@ protected:
         bus.attach(chip);
         ASSERT_TRUE(pwm.init());
         ASSERT_TRUE(pwm.setAllIdle());
+        calib.begin();
         proc.begin(now);
         (void) port.takeLines();
     }
@@ -88,7 +91,11 @@ protected:
     PanTilt                        head{pan, tilt};
     ::owlet::test::FakeSerialPort  port;
     ::owlet::test::FakeClock       clock;
-    NmeaProtocol                   nmea{port, head, clock, "test"};
+    ::owlet::test::FakeCalibrationStore store;
+    ::owlet::core::Calibrator      calib{pan, tilt, head, store,
+                                    ::owlet::core::CalibrationRecord{Servo::Calibration{},
+                                                                     Servo::Calibration{}}};
+    NmeaProtocol                   nmea{port, head, calib, clock, "test"};
     ProtocolMux<1>                 mux{{&nmea}};
     ControlLoop                    proc{port, head, mux};
     uint32_t                       now{0};
@@ -126,4 +133,11 @@ TEST_F(IntegrationTest, DisableReturnsChannelsToFullOff)
     send("DISABLE");
     EXPECT_TRUE(chip.fullOff(0));
     EXPECT_TRUE(chip.fullOff(1));
+}
+
+TEST_F(IntegrationTest, ReversedAxisDrivesTheMirroredPulse)
+{
+    send("CAL,TILT,2500,1500,500,-90,90");
+    send("ENABLE,0,45");
+    EXPECT_NEAR(pulseUs(1), 1000.0, 10.0);  // +45° on a reversed axis
 }

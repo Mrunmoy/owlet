@@ -1,6 +1,8 @@
+#include "FakeCalibrationStore.hpp"
 #include "FakeClock.hpp"
 #include "FakeSerialPort.hpp"
 #include "FakeServoChannel.hpp"
+#include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/nmea/LineWriter.hpp"
@@ -37,6 +39,11 @@ std::string line(const std::string& body)
     return f.substr(0, f.size() - 2);
 }
 
+::owlet::core::CalibrationRecord factoryCal()
+{
+    return ::owlet::core::CalibrationRecord{Servo::Calibration{}, Servo::Calibration{}};
+}
+
 struct Rig
 {
     FakeServoChannel panCh;
@@ -47,11 +54,14 @@ struct Rig
     FakeSerialPort   port;
     FakeClock        clock{1000};
     uint32_t&        now = clock.t;
-    NmeaProtocol     proto{port, head, clock, "0.1.0"};
+    ::owlet::test::FakeCalibrationStore store;
+    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    NmeaProtocol     proto{port, head, calib, clock, "0.1.0"};
     ControlLoop      proc{port, head, proto};
 
     Rig()
     {
+        calib.begin();
         proc.begin(now);
         (void) port.takeLines();
     }
@@ -92,15 +102,17 @@ TEST(NmeaProtocol, AnnouncesReadyOnBegin)
     PanTilt          head{pan, tilt};
     FakeSerialPort   port;
     FakeClock        clock;
-    NmeaProtocol     proto{port, head, clock, "0.1.0"};
+    ::owlet::test::FakeCalibrationStore store;
+    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    NmeaProtocol     proto{port, head, calib, clock, "0.1.0"};
     proto.begin(0);
-    EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("READY,2,0.1.0")});
+    EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("READY,3,0.1.0")});
 }
 
 TEST(NmeaProtocol, PingReturnsVersions)
 {
     Rig r;
-    EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,2,0.1.0")});
+    EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
 TEST(NmeaProtocol, PosReportsDisabledAtBoot)
@@ -177,7 +189,7 @@ TEST(NmeaProtocol, IgnoresBootNoiseBeforeFirstFrame)
 {
     Rig r;
     r.port.rx += "ESP-ROM:esp32s3\r\nbuild: Mar 27 2021\r\n";
-    EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,2,0.1.0")});
+    EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
 TEST(NmeaProtocol, SeveralRequestsInOneReadAnsweredInOrder)
@@ -186,7 +198,7 @@ TEST(NmeaProtocol, SeveralRequestsInOneReadAnsweredInOrder)
     r.port.rx += frame("PING") + frame("LIMITS") + frame("SPEED");
     r.proc.service(r.now);
     EXPECT_EQ(r.port.takeLines(),
-              (std::vector<std::string>{line("PONG,2,0.1.0"),
+              (std::vector<std::string>{line("PONG,3,0.1.0"),
                                         line("LIMITS,-90.0,90.0,-90.0,90.0"),
                                         line("SPEED,90.0")}));
 }
@@ -271,7 +283,7 @@ TEST(NmeaProtocol, ReleasesStreamAtEndOfLine)
     const ::owlet::core::ConsumeResult rest = r.proto.consume(d + 4, f.size() - 4);
     EXPECT_TRUE(rest.released);
     EXPECT_EQ(rest.consumed, f.size() - 4 - 1);  // releases on '\r', leaves '\n'
-    EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("PONG,2,0.1.0")});
+    EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
 // ── Protocol v2: velocity, watchdog, clock ──────────────────────────────────
@@ -400,7 +412,7 @@ TEST(NmeaProtocolReview, GarbledRequestStillGetsAReply)  // N1
         r.proc.service(r.now);
         EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("ERR,SYN")}) << bad;
         // ...and the next request is unaffected.
-        EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,2,0.1.0")});
+        EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
     }
 }
 
@@ -423,4 +435,65 @@ TEST(NmeaProtocolReview, OverflowHandsTheStreamBack)  // M2
         r.proto.consume(reinterpret_cast<const uint8_t*>(in.data()), in.size());
     EXPECT_TRUE(res.released);
     EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("ERR,LEN")});
+}
+
+// ── Protocol v3: capabilities and calibration ───────────────────────────────
+
+TEST(NmeaCalibration, CapsReportsMotionRanges)
+{
+    Rig r;
+    EXPECT_EQ(r.send("CAPS"), std::vector<std::string>{line("CAPS,1.0,500.0,500.0,50,5000,50")});
+}
+
+TEST(NmeaCalibration, CalQueryReportsAxisCalibration)
+{
+    Rig r;
+    EXPECT_EQ(r.send("CAL,PAN"),
+              std::vector<std::string>{line("CAL,PAN,500,1500,2500,-90.0,90.0,N,F")});
+}
+
+TEST(NmeaCalibration, SetReverseSaveAndQuery)
+{
+    Rig r;
+    EXPECT_EQ(r.send("CAL,TILT,2500,1500,500,-90,90"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("CAL,TILT"),
+              std::vector<std::string>{line("CAL,TILT,2500,1500,500,-90.0,90.0,R,M")});
+    EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_TRUE(r.store.hasRecord);
+    EXPECT_EQ(r.send("CAL,TILT"),
+              std::vector<std::string>{line("CAL,TILT,2500,1500,500,-90.0,90.0,R,S")});
+}
+
+TEST(NmeaCalibration, LimitsChangeWhileEnabledAndShowInLimits)
+{
+    Rig r;
+    (void) r.send("ENABLE");
+    EXPECT_EQ(r.send("CAL,PAN,500,1500,2500,-85,90"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("LIMITS"), std::vector<std::string>{line("LIMITS,-85.0,90.0,-90.0,90.0")});
+}
+
+TEST(NmeaCalibration, Errors)
+{
+    Rig r;
+    EXPECT_EQ(r.send("CAL,PAN,300,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    // 66036 would wrap to 500 in a uint16_t and pass validation if cast blindly.
+    EXPECT_EQ(r.send("CAL,PAN,66036,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    EXPECT_EQ(r.send("CAL,PAN,500"), std::vector<std::string>{line("NAK,CAL,FMT")});
+    EXPECT_EQ(r.send("CAL,FOO"), std::vector<std::string>{line("NAK,CAL,FMT")});
+    (void) r.send("ENABLE");
+    EXPECT_EQ(r.send("CAL,TILT,2500,1500,500,-90,90"), std::vector<std::string>{line("NAK,CAL,ENA")});
+    EXPECT_EQ(r.send("CAL,RESET"), std::vector<std::string>{line("NAK,CAL,ENA")});
+    r.store.failSave = true;
+    EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("NAK,CAL,STO")});
+}
+
+TEST(NmeaCalibration, ResetRestoresFactory)
+{
+    Rig r;
+    (void) r.send("CAL,TILT,2500,1500,500,-90,90");
+    (void) r.send("CAL,SAVE");
+    EXPECT_EQ(r.send("CAL,RESET"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("CAL,TILT"),
+              std::vector<std::string>{line("CAL,TILT,500,1500,2500,-90.0,90.0,N,F")});
+    EXPECT_FALSE(r.store.hasRecord);
 }

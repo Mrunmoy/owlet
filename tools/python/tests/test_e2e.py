@@ -23,22 +23,36 @@ SIM = Path(os.environ.get("OWLET_SIM", REPO / "build/host/apps/host-sim/owlet_si
 class EndToEndTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.link = os.path.join(self.tmp.name, "owlet")
-        self.sim = subprocess.Popen([str(SIM), "--link", self.link],
+        self.cal_file = os.path.join(self.tmp.name, "cal.bin")
+        self.start_sim()
+
+    def start_sim(self):
+        self.sim = subprocess.Popen([str(SIM), "--link", self.link, "--cal-file", self.cal_file],
                                     stdout=subprocess.PIPE, text=True)
+        # Registered before anything that can fail, so a failed connect can't
+        # leave an orphaned simulator behind.
+        self.addCleanup(self._kill_sim, self.sim)
         self.assertEqual(self.sim.stdout.readline().strip(), self.link)
         self.head = Owlet(self.link, timeout=1.0)
+        self.addCleanup(self.head.close)
 
-    def tearDown(self):
+    @staticmethod
+    def _kill_sim(sim):
+        if sim.poll() is None:
+            sim.terminate()
+            sim.wait(timeout=5)
+        if not sim.stdout.closed:
+            sim.stdout.close()
+
+    def stop_sim(self):
         self.head.close()
-        self.sim.terminate()
-        self.sim.wait(timeout=5)
-        self.sim.stdout.close()
-        self.tmp.cleanup()
+        self._kill_sim(self.sim)
 
     def test_handshake(self):
-        self.assertEqual(self.head.protocol_version, 2)
-        self.assertEqual(self.head.firmware_version, "0.2.0")
+        self.assertEqual(self.head.protocol_version, 3)
+        self.assertEqual(self.head.firmware_version, "0.3.0")
 
     def test_boots_disabled_and_refuses_motion(self):
         self.assertFalse(self.head.position().enabled)
@@ -142,12 +156,66 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(tr.timeouts, 1)
             self.assertEqual(tr.latest.state, "H")
 
+    def test_capabilities_are_reported(self):
+        c = self.head.caps()
+        self.assertEqual((c.speed_max, c.velocity_max, c.stream_max_hz), (500.0, 500.0, 50))
+
+    def test_calibration_persists_across_a_restart(self):
+        self.head.set_reversed("tilt", True)
+        self.head.set_limits("pan", -85, 90)
+        self.head.save_calibration()
+        self.stop_sim()
+        self.start_sim()  # "power cycle": a fresh process loading the same store
+        tilt, pan = self.head.calibration("tilt"), self.head.calibration("pan")
+        self.assertEqual((tilt.reversed, tilt.source), (True, "saved"))
+        self.assertEqual(pan.min_deg, -85.0)
+        self.assertEqual(self.head.limits()[0], -85.0)
+        # and it really drives the head: +45° tilt on a reversed axis is still "up"
+        self.head.enable()
+        self.assertEqual(self.head.move(0, 45, wait=True, timeout=3).tilt, 45.0)
+
+    def test_reset_restores_factory_and_forgets_the_saved_copy(self):
+        self.head.set_reversed("tilt", True)
+        self.head.save_calibration()
+        self.head.reset_calibration()
+        self.stop_sim()
+        self.start_sim()
+        t = self.head.calibration("tilt")
+        self.assertEqual((t.reversed, t.source), (False, "factory"))
+
+    def test_cli_mirrors_limits_only_when_the_direction_really_changes(self):  # review N7
+        def cli(*args):
+            return subprocess.run([sys.executable, "-m", "owlet", "-p", self.link, *args],
+                                  capture_output=True, text=True, timeout=10,
+                                  cwd=REPO / "tools/python")
+        self.assertEqual(cli("cal", "tilt", "--reverse", "--limits", "-80", "30").returncode, 0)
+        # Already reversed: new pulses, still reversed -> limits untouched.
+        self.assertEqual(cli("cal", "tilt", "--pulses", "600", "1500", "2400", "--reverse").returncode, 0)
+        c = self.head.calibration("tilt")
+        self.assertEqual((c.min_us, c.max_us, c.reversed), (2400, 600, True))
+        self.assertEqual((c.min_deg, c.max_deg), (-80.0, 30.0))
+        # Normal axis given reversed pulses with --no-reverse: un-reversed, limits untouched.
+        self.assertEqual(cli("cal", "pan", "--limits", "-30", "80").returncode, 0)
+        self.assertEqual(cli("cal", "pan", "--pulses", "2400", "1500", "600", "--no-reverse").returncode, 0)
+        p = self.head.calibration("pan")
+        self.assertEqual((p.min_us, p.max_us, p.reversed), (600, 2400, False))
+        self.assertEqual((p.min_deg, p.max_deg), (-30.0, 80.0))
+
     def test_cli(self):
         def cli(*args):
             return subprocess.run([sys.executable, "-m", "owlet", "-p", self.link, *args],
                                   capture_output=True, text=True, timeout=10,
                                   cwd=REPO / "tools/python")
-        self.assertIn("protocol v2", cli("ping").stdout)
+        self.assertIn("protocol v3", cli("ping").stdout)
+        self.assertIn("velocity max 500.0", cli("caps").stdout)
+        self.assertEqual(cli("cal", "tilt", "--reverse", "--limits", "-80", "85").returncode, 0)
+        out = cli("cal").stdout
+        self.assertIn("tilt", out)
+        self.assertIn("reversed", out)
+        self.assertIn("-80.0..85.0", out)  # explicit --limits are the final limits, after reversing
+        self.assertEqual(cli("cal", "save", "--limits", "1", "2").returncode, 2)  # flags + save: refused
+        self.assertEqual(cli("cal", "save").returncode, 0)
+        self.assertIn("saved", cli("cal", "tilt").stdout)
         self.assertEqual(cli("enable").returncode, 0)
         out = cli("move", "10", "-20", "--wait").stdout
         self.assertIn("pan   10.0  tilt  -20.0", out)

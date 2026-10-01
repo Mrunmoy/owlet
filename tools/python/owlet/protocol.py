@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from functools import reduce
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_LINE_LEN = 82
 
 _NAME_RE = re.compile(r"^[A-Z]{1,10}$")
@@ -56,6 +56,56 @@ class Position:
     @property
     def moving(self) -> bool:
         return self.state == "M"
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """What the head can do ($CAPS)."""
+
+    speed_min: float        # slew speed range for position moves, deg/s
+    speed_max: float
+    velocity_max: float     # |rate| limit in velocity mode, deg/s
+    watchdog_min_ms: int    # non-zero watchdog range (0 = off is also allowed)
+    watchdog_max_ms: int
+    stream_max_hz: int
+
+
+@dataclass(frozen=True)
+class AxisCalibration:
+    """One axis's calibration ($CAL,<AXIS>)."""
+
+    axis: str               # "pan" or "tilt"
+    min_us: int             # pulse at -90 degrees
+    center_us: int          # pulse at 0 degrees
+    max_us: int             # pulse at +90 degrees
+    min_deg: float          # soft limits
+    max_deg: float
+    reversed: bool
+    source: str             # "factory", "saved" or "modified"
+
+
+_SOURCES = {"F": "factory", "S": "saved", "M": "modified"}
+
+
+def parse_caps(sentence: Sentence) -> Capabilities:
+    f = sentence.fields
+    if sentence.name != "CAPS" or len(f) != 6:
+        raise ProtocolError(f"not a CAPS report: {sentence}")
+    try:
+        return Capabilities(float(f[0]), float(f[1]), float(f[2]), int(f[3]), int(f[4]), int(f[5]))
+    except ValueError as e:
+        raise ProtocolError(f"bad CAPS field in {sentence}") from e
+
+
+def parse_calibration(sentence: Sentence) -> AxisCalibration:
+    f = sentence.fields
+    if sentence.name != "CAL" or len(f) != 8 or f[6] not in ("R", "N") or f[7] not in _SOURCES:
+        raise ProtocolError(f"not a CAL report: {sentence}")
+    try:
+        return AxisCalibration(f[0].lower(), int(f[1]), int(f[2]), int(f[3]),
+                               float(f[4]), float(f[5]), f[6] == "R", _SOURCES[f[7]])
+    except ValueError as e:
+        raise ProtocolError(f"bad CAL field in {sentence}") from e
 
 
 def checksum(body: str) -> int:

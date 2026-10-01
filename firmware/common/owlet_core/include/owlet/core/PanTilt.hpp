@@ -47,6 +47,7 @@ public:
     [[nodiscard]] Pose target() const override;
     [[nodiscard]] float speed() const override;
     [[nodiscard]] Limits limits() const override;
+    [[nodiscard]] Capabilities capabilities() const override;
 
     // ── ITickable ───────────────────────────────────────────────────────────
 

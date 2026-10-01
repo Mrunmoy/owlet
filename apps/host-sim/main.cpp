@@ -5,7 +5,11 @@
 //   python -m owlet -p /dev/pts/7 ping
 //
 // With --link PATH the pty is also symlinked to PATH for a stable name.
+// With --cal-file PATH the calibration is persisted to PATH (as NVS would be
+// on the device); without it, $CAL,SAVE keeps it in memory only.
 
+#include "owlet/core/CalibrationCodec.hpp"
+#include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
@@ -23,6 +27,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <vector>
 #include <fcntl.h>
 #include <string>
 #include <termios.h>
@@ -112,16 +119,68 @@ public:
     }
 };
 
+// ICalibrationStore on a file (or memory when no path is given), using the
+// same byte format the ESP32 writes to NVS.
+class FileCalibrationStore final : public ::owlet::core::ICalibrationStore
+{
+public:
+    explicit FileCalibrationStore(std::string path) : m_path(std::move(path)) {}
+
+    [[nodiscard]] bool load(::owlet::core::CalibrationRecord& out) override
+    {
+        std::vector<uint8_t> bytes = m_memory;
+        if (!m_path.empty())
+        {
+            std::ifstream in(m_path, std::ios::binary);
+            if (!in)
+            {
+                return false;
+            }
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        return ::owlet::core::CalibrationCodec::decode(bytes.data(), bytes.size(), out);
+    }
+
+    [[nodiscard]] bool save(const ::owlet::core::CalibrationRecord& record) override
+    {
+        const auto bytes = ::owlet::core::CalibrationCodec::encode(record);
+        if (m_path.empty())
+        {
+            m_memory.assign(bytes.begin(), bytes.end());
+            return true;
+        }
+        std::ofstream out(m_path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(out);
+    }
+
+    [[nodiscard]] bool erase() override
+    {
+        m_memory.clear();
+        return m_path.empty() || std::remove(m_path.c_str()) == 0 || errno == ENOENT;
+    }
+
+private:
+    std::string          m_path;
+    std::vector<uint8_t> m_memory;
+};
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     std::string link;
+    std::string calFile;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--link") == 0 && i + 1 < argc)
         {
             link = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--cal-file") == 0 && i + 1 < argc)
+        {
+            calFile = argv[++i];
         }
     }
 
@@ -164,7 +223,13 @@ int main(int argc, char** argv)
     std::fflush(stdout);
 
     SteadyClock                 clock;
-    ::owlet::nmea::NmeaProtocol protocol(port, head, clock, ::owlet::core::kFirmwareVersion);
+    FileCalibrationStore      store(calFile);
+    ::owlet::core::Calibrator calibrator(
+        pan, tilt, head, store,
+        ::owlet::core::CalibrationRecord{::owlet::Servo::Calibration{}, ::owlet::Servo::Calibration{}});
+    calibrator.begin();
+    ::owlet::nmea::NmeaProtocol protocol(port, head, calibrator, clock,
+                                         ::owlet::core::kFirmwareVersion);
     ::owlet::core::ControlLoop  loop(port, head, protocol);
     loop.begin(clock.nowMs());
     while (g_stop == 0)

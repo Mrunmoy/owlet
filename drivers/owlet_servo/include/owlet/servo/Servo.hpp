@@ -38,6 +38,9 @@ public:
     static constexpr float kMinSpeedDegPerSec = 1.0f;
     static constexpr float kMaxSpeedDegPerSec = 500.0f;
     static constexpr float kDefaultSpeedDegPerSec = 90.0f;
+    // Slack for "is the horn inside its limits": one reporting step (0.1°,
+    // about 1 µs), so µs rounding on a limit isn't mistaken for "outside".
+    static constexpr float kPositionToleranceDeg = 0.1f;
 
     Servo(::owlet::hal::IServoChannel& channel, Calibration cal);
 
@@ -67,6 +70,15 @@ public:
     // Zero is the same as stop(). Independent of speed(). No bus traffic.
     void setVelocity(float degPerSec);
 
+    // Replace the calibration (e.g. a reversed axis or new soft limits).
+    //  - New pulses: the horn hasn't moved, so the position estimate is
+    //    re-derived from the last pulse actually sent. (Changing the pulses of
+    //    an *engaged* servo would make it jump; Calibrator refuses that.)
+    //  - A powered axis left outside the new limits leaves velocity mode and
+    //    slews back inside at speed(), never jumps.
+    void setCalibration(const Calibration& cal);
+    const Calibration& calibration() const { return m_cal; }
+
     // Clamped to [kMinSpeedDegPerSec, kMaxSpeedDegPerSec].
     void setSpeed(float degPerSec);
 
@@ -88,7 +100,16 @@ public:
     float maxDeg() const { return m_cal.maxDeg; }
 
     uint16_t angleToPulse(float deg) const;
+    float    pulseToAngle(uint16_t pulseUs) const;  // inverse of angleToPulse
     float    clampDeg(float deg) const;
+    // False if the horn may be outside the limits, or its angle is unknown
+    // (its last pulse lies beyond the current pulse range).
+    [[nodiscard]] bool positionInLimits() const
+    {
+        return m_positionKnown && m_positionDeg >= m_cal.minDeg - kPositionToleranceDeg &&
+               m_positionDeg <= m_cal.maxDeg + kPositionToleranceDeg;
+    }
+    [[nodiscard]] bool positionKnown() const { return m_positionKnown; }
 
 private:
     ::owlet::hal::IServoChannel& m_channel;
@@ -100,6 +121,7 @@ private:
     uint16_t                     m_lastPulseUs{0};
     bool                         m_engaged{false};
     bool                         m_velocityMode{false};
+    bool                         m_positionKnown{true};
 };
 
 } // namespace owlet

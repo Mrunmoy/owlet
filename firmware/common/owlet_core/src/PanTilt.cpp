@@ -16,6 +16,14 @@ PanTilt::Result PanTilt::enable()
     // Last known position, not target: after a mid-move DISABLE the horn is
     // near the position estimate, so energising there keeps the snap small.
     // Axes that are still powered are left alone.
+    // If the horn is outside the limits (they were narrowed, or the axis was
+    // re-pulsed, while disabled), energising "where it is" would snap it to
+    // the limit: the caller must choose a pose with enableAt() instead.
+    if ((!m_pan.engaged() && !m_pan.positionInLimits()) ||
+        (!m_tilt.engaged() && !m_tilt.positionInLimits()))
+    {
+        return Result::Range;
+    }
     if ((!m_pan.engaged() && !m_pan.engageAt(m_pan.positionDeg())) ||
         (!m_tilt.engaged() && !m_tilt.engageAt(m_tilt.positionDeg())))
     {
@@ -221,6 +229,12 @@ float PanTilt::speed() const
 PanTilt::Limits PanTilt::limits() const
 {
     return Limits{m_pan.minDeg(), m_pan.maxDeg(), m_tilt.minDeg(), m_tilt.maxDeg()};
+}
+
+PanTilt::Capabilities PanTilt::capabilities() const
+{
+    return Capabilities{Servo::kMinSpeedDegPerSec, Servo::kMaxSpeedDegPerSec,
+                        Servo::kMaxSpeedDegPerSec, kMinWatchdogMs, kMaxWatchdogMs};
 }
 
 bool PanTilt::inLimits(const Servo& s, float deg)

@@ -75,6 +75,8 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 | `hal::IByteSource` / `hal::IByteSink` | `owlet_hal` | Input and output halves of a byte stream. `ISerialPort` combines them. Protocols only receive a sink; the loop only receives a source. |
 | `hal::IServoChannel` | `owlet_hal` | One PWM output: the seam for PCA9685, LEDC or anything else. |
 | `core::IPanTilt` | `owlet_core` | Everything a protocol may ask of the head: enable/disable, move/nudge/home/stop, speed, pose, limits, state. A stepper-based head would implement this and reuse every protocol unchanged. |
+| `core::ICalibration` | `owlet_core` | Read, set, save and reset per-axis calibration. Implemented by `Calibrator`, which validates and enforces the enabled/disabled rules. |
+| `core::ICalibrationStore` | `owlet_core` | Persistence for calibration (NVS on ESP32, a file in the simulator, a fake in tests). |
 | `core::ITickable` | `owlet_core` | `tick(dtMs) → TickStatus`: advance motion and report events (bus fault, watchdog trip). Only the loop calls it, never a protocol. |
 | `core::IProtocol` | `owlet_core` | A wire protocol: `claims()` / `consume()` / `begin()` / `onTick()` (see §4.3). |
 
@@ -142,11 +144,11 @@ class IProtocol {
 - **ESP-IDF:** `include(owlet/cmake/owlet-idf-components.cmake)` and append `${OWLET_IDF_COMPONENT_DIRS}` to `EXTRA_COMPONENT_DIRS`. The bundled app uses this same list.
 - **Python:** `pip install ./owlet/tools/python`, or `pip install -e` for development.
 
-## 5. Native wire protocol (v2)
+## 5. Native wire protocol (v3)
 
 This is owlet's built-in protocol. It is designed for **closed-loop control from a PC**, such as camera-based object tracking: commands replace the current goal immediately instead of queuing, velocity mode with a safety watchdog maps directly onto a tracking controller's output, and timestamped position streaming lets the PC know where the head pointed when each camera frame was taken. Other protocols can be added as plug-ins (§4.4).
 
-Version 2 (owlet 0.2.0) added `VEL`, `WATCHDOG`, `CLOCK`, `$TIMEOUT`, and the timestamp field on `$POS`. Clients must check the version in `$PONG`.
+Version 2 (owlet 0.2.0) added `VEL`, `WATCHDOG`, `CLOCK`, `$TIMEOUT`, and the timestamp field on `$POS`. Version 3 (owlet 0.3.0) added `CAPS` and `CAL` (§5.6). Clients must check the version in `$PONG`.
 
 ### 5.1 Framing
 
@@ -173,7 +175,7 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 
 | Request                     | Success reply                         | Notes |
 |-----------------------------|---------------------------------------|-------|
-| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,2,0.2.0` |
+| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.3.0` |
 | `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both servos at their last known position (initially 0,0). No-op if already enabled. |
 | `$ENABLE,<pan>,<tilt>`      | `$ACK,ENABLE`                         | Energise at the given pose (snap). If already enabled, this is a slewed move and earns an `$ARRIVED`. |
 | `$DISABLE`                  | `$ACK,DISABLE`                        | PWM off; servos go limp. Target is kept. |
@@ -190,6 +192,8 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 | `$WATCHDOG`                 | `$WATCHDOG,<ms>`                      | Query the velocity watchdog timeout. |
 | `$WATCHDOG,<ms>`            | `$ACK,WATCHDOG`                       | 0 = off, otherwise 50–5000 ms. Default 500. |
 | `$CLOCK`                    | `$CLOCK,<ms>`                         | Device uptime in ms (wraps after ~49.7 days), for clock sync. |
+| `$CAPS`                     | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Motion capabilities (§5.6). |
+| `$CAL,…`                    | see §5.6                              | Read, set, save or reset the per-axis calibration. |
 
 `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` require the servos to be enabled; otherwise the reply is `$NAK,<CMD>,DIS`. This means a PC can't make the head snap by queuing a move while it's limp. The only way to choose the energise pose is the explicit `ENABLE,<pan>,<tilt>`.
 
@@ -203,6 +207,8 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 | `$NAK,<CMD>,RNG`   | Value outside the allowed range |
 | `$NAK,<CMD>,DIS`   | Servos disabled; send `ENABLE` first |
 | `$NAK,<CMD>,BUS`   | PCA9685 write failed (I2C error) |
+| `$NAK,CAL,ENA`     | Pulse calibration can only change while the servos are disabled |
+| `$NAK,CAL,STO`     | Saving or erasing the calibration in flash failed |
 | `$ERR,CHK`         | Checksum mismatch: the frame was discarded unread |
 | `$ERR,LEN`         | Frame exceeded 82 bytes |
 | `$ERR,SYN`         | Frame is not `$...*HH` |
@@ -234,6 +240,33 @@ Unsolicited messages (device → PC):
 When streaming is on, a streamed `$POS` and the reply to a `$POS` request look the same; both are current, so either answers the query.
 
 Clients must tolerate unsolicited lines interleaved with replies. A reply is identified by its name (`ACK`/`NAK`/`PONG`/...), not its position in the stream.
+
+### 5.6 Capabilities and calibration (v3)
+
+A client shouldn't have to probe the head to find out what it can do. It asks:
+
+```
+$CAPS                → $CAPS,1.0,500.0,500.0,50,5000,50
+                        slew speed min/max (°/s), velocity-mode max (°/s),
+                        watchdog min/max (ms; 0 = off is also allowed), max stream rate (Hz)
+$LIMITS              → $LIMITS,<pmin>,<pmax>,<tmin>,<tmax>        (soft limits, degrees)
+$CAL,PAN             → $CAL,PAN,<min_us>,<center_us>,<max_us>,<min_deg>,<max_deg>,<rev>,<src>
+$CAL,TILT            → $CAL,TILT,…
+```
+
+`rev` is `R` when the axis is reversed (`min_us > max_us`) and `N` otherwise. `src` says where the values came from: `F` = factory (Kconfig), `S` = saved in flash, `M` = modified since the last load or save.
+
+**Calibrating from the PC.** The calibration lives on the device, so every client sees the same values and recalibrating never needs a rebuild:
+
+| Request | Reply | Notes |
+|---------|-------|-------|
+| `$CAL,<AXIS>,<min_us>,<center_us>,<max_us>,<min_deg>,<max_deg>` | `$ACK,CAL` | `AXIS` = `PAN` / `TILT`. Pulses are integers, 400–2600, at least 200 µs apart, with the centre strictly between them. Limits: −90 ≤ min < max ≤ 90 and min ≤ 0 ≤ max, stored at 0.1° resolution. **To reverse an axis, swap min/max pulses *and* mirror the limits** (`min, max → −max, −min`) so they keep protecting the same physical end stops (`owlet cal <axis> --reverse` does both). Changing the **pulses** while enabled → `NAK,CAL,ENA` (the servo would jump). Changing only the **limits** is allowed at any time: a powered axis left outside them ends velocity mode and slews back inside at the slew speed; it never jumps. |
+| `$CAL,SAVE` | `$ACK,CAL` | Store both axes in flash (NVS). Survives power cycles and reflashing. |
+| `$CAL,RESET` | `$ACK,CAL` | Restore the factory (Kconfig) values and erase the saved copy. Requires the servos to be disabled. |
+
+At boot the device loads the saved calibration if there is a valid one (versioned record with a CRC32); otherwise it uses the factory values. A factory (Kconfig) record that fails validation is replaced by the safe defaults (500/1500/2500 µs, ±90°) and logged.
+
+**Re-pulsing while disabled.** The horn doesn't move while limp, so when an axis's pulses change, its position estimate is re-derived from the last pulse it was actually sent. If that puts the horn outside the (possibly new) limits, a bare `ENABLE` is refused with `NAK,ENABLE,RNG`, because energising "where it is" would snap it to the limit. Use `ENABLE,<pan>,<tilt>` to choose the pose explicitly. The same applies when the horn's last pulse lies beyond the new pulse range: its angle is then *unknown* (until the next explicit pose), and `$POS` meanwhile shows the nearest representable angle (±90°), not a measurement. The record format lives in host-tested code (`CalibrationCodec`), so only the NVS read/write itself is platform-specific.
 
 ## 6. Behaviour
 

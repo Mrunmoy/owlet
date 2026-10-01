@@ -63,9 +63,11 @@ _t0 = time.monotonic()
 def default_responder(s):
     ms = int((time.monotonic() - _t0) * 1000)
     if s.name == "PING":
-        return ["PONG,2,test"]
+        return ["PONG,3,test"]
     if s.name == "CLOCK":
         return [f"CLOCK,{ms}"]
+    if s.name == "CAPS":
+        return ["CAPS,1.0,500.0,500.0,50,5000,50"]
     if s.name == "POS":
         return [f"POS,0.0,0.0,0.0,0.0,H,{ms}"]
     if s.name in ("WATCHDOG", "STREAM", "VEL", "STOP", "ENABLE", "DISABLE", "MOVE"):

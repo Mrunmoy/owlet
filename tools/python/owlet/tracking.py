@@ -237,6 +237,7 @@ class Tracker:
         self._clock_t0: float | None = None
         self._next_resync = 0.0
         self.clock_misses = 0
+        self._max_rate = _MAX_RATE
 
     def __enter__(self) -> "Tracker":
         self.start()
@@ -258,6 +259,8 @@ class Tracker:
             self._clock_t0 = None
             self.clock.sync(self._head.clock, self._clock_samples)
             self._head.watchdog(self._watchdog_ms)
+            # Clamp to what *this* head reports, not to an assumed constant.
+            self._max_rate = min(_MAX_RATE, self._head.caps().velocity_max)
             self._head.stream(self._stream_hz)
             self.failed = False
             self._next_resync = time.monotonic() + self._resync_s
@@ -293,13 +296,14 @@ class Tracker:
     def set_rates(self, pan_deg_s: float, tilt_deg_s: float) -> None:
         """Command turn rates now (fire-and-forget; also feeds the watchdog).
 
-        Rates are clamped to ±500 °/s: an out-of-range VEL would be refused
-        and the *previous* rate would keep running until the watchdog.
+        Rates are clamped to the head's reported velocity limit ($CAPS): an
+        out-of-range VEL would be refused and the *previous* rate would keep
+        running until the watchdog.
         """
         if math.isnan(pan_deg_s) or math.isnan(tilt_deg_s):
             raise ValueError("rates must be numbers")
-        pan = max(-_MAX_RATE, min(_MAX_RATE, pan_deg_s))
-        tilt = max(-_MAX_RATE, min(_MAX_RATE, tilt_deg_s))
+        pan = max(-self._max_rate, min(self._max_rate, pan_deg_s))
+        tilt = max(-self._max_rate, min(self._max_rate, tilt_deg_s))
         with self._lock:
             if self.failed:
                 raise OwletError(f"tracker failed: {self.last_error}",

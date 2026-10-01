@@ -50,7 +50,7 @@ constexpr uint8_t kArgs0  = 1U << 0;
 constexpr uint8_t kArgs1  = 1U << 1;
 constexpr uint8_t kArgs2  = 1U << 2;
 
-constexpr std::array<CommandSpec, 14> kCommands{{
+constexpr std::array<CommandSpec, 16> kCommands{{
     {"PING", Command::Ping, kArgs0, false},
     {"ENABLE", Command::Enable, kArgs0 | kArgs2, false},
     {"DISABLE", Command::Disable, kArgs0, false},
@@ -65,6 +65,8 @@ constexpr std::array<CommandSpec, 14> kCommands{{
     {"VEL", Command::Vel, kArgs2, false},
     {"WATCHDOG", Command::Watchdog, kArgs0 | kArgs1, true},
     {"CLOCK", Command::Clock, kArgs0, false},
+    {"CAPS", Command::Caps, kArgs0, false},
+    {"CAL", Command::Cal, 0, false},  // parsed by parseCal()
 }};
 
 } // namespace
@@ -215,6 +217,39 @@ bool parseUnsigned(std::string_view text, uint32_t& out)
     return true;
 }
 
+// CAL,<PAN|TILT|SAVE|RESET>  or  CAL,<PAN|TILT>,<min_us>,<center_us>,<max_us>,<min_deg>,<max_deg>
+static RequestStatus parseCal(const Sentence& s, Request& out)
+{
+    if (s.fieldCount == 0)
+    {
+        return RequestStatus::BadFormat;
+    }
+    const std::string_view t    = s.fields[0];
+    const bool             axis = (t == "PAN" || t == "TILT");
+    const bool             verb = (t == "SAVE" || t == "RESET");
+    out.token                   = t;
+    if (s.fieldCount == 1 && (axis || verb))
+    {
+        return RequestStatus::Ok;
+    }
+    if (s.fieldCount != 6 || !axis)
+    {
+        return RequestStatus::BadFormat;
+    }
+    for (std::size_t i = 0; i < 3; ++i)  // pulses: unsigned integers
+    {
+        uint32_t v = 0;
+        if (!parseUnsigned(s.fields[i + 1], v)) return RequestStatus::BadFormat;
+        out.args[i] = static_cast<float>(v);
+    }
+    for (std::size_t i = 3; i < 5; ++i)  // limits: decimals
+    {
+        if (!parseDecimal(s.fields[i + 1], out.args[i])) return RequestStatus::BadFormat;
+    }
+    out.argCount = 5;
+    return RequestStatus::Ok;
+}
+
 RequestStatus parseRequest(const Sentence& sentence, Request& out)
 {
     out = Request{};
@@ -225,21 +260,24 @@ RequestStatus parseRequest(const Sentence& sentence, Request& out)
             continue;
         }
         out.command = spec.command;
+        if (spec.command == Command::Cal)
+        {
+            return parseCal(sentence, out);
+        }
         const std::size_t n = sentence.fieldCount;
         if (n > 2 || (spec.argCountMask & (1U << n)) == 0)
         {
             return RequestStatus::BadFormat;
         }
-        float* const slots[2] = {&out.a, &out.b};
         for (std::size_t i = 0; i < n; ++i)
         {
             if (spec.integerArgs)
             {
                 uint32_t v = 0;
                 if (!parseUnsigned(sentence.fields[i], v)) return RequestStatus::BadFormat;
-                *slots[i] = static_cast<float>(v);
+                out.args[i] = static_cast<float>(v);
             }
-            else if (!parseDecimal(sentence.fields[i], *slots[i]))
+            else if (!parseDecimal(sentence.fields[i], out.args[i]))
             {
                 return RequestStatus::BadFormat;
             }

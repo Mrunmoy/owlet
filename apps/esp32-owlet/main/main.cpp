@@ -4,6 +4,7 @@
 // and runs the 100 Hz service loop. All behaviour lives in
 // firmware/common/owlet_core (host-tested); nothing here makes decisions.
 
+#include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
@@ -12,6 +13,7 @@
 #include "owlet/platform/esp32/Esp32Clock.hpp"
 #include "owlet/platform/esp32/Esp32Delay.hpp"
 #include "owlet/platform/esp32/Esp32I2CBus.hpp"
+#include "owlet/platform/esp32/Esp32NvsCalibrationStore.hpp"
 #include "owlet/platform/esp32/Esp32UsbSerial.hpp"
 #include "owlet/servo/Servo.hpp"
 
@@ -30,6 +32,7 @@ using ::owlet::Servo;
 using ::owlet::platform::esp32::Esp32Clock;
 using ::owlet::platform::esp32::Esp32Delay;
 using ::owlet::platform::esp32::Esp32I2CBus;
+using ::owlet::platform::esp32::Esp32NvsCalibrationStore;
 using ::owlet::platform::esp32::Esp32UsbSerial;
 
 constexpr const char* kTag          = "owlet";
@@ -47,6 +50,8 @@ constexpr Servo::Calibration makeCalibration(int minUs, int centerUs, int maxUs,
     return c;
 }
 
+// Kconfig values are the *factory* calibration. A calibration saved on the
+// device with $CAL,SAVE takes precedence at boot.
 constexpr Servo::Calibration kPanCal = makeCalibration(
     CONFIG_OWLET_PAN_PULSE_MIN_US, CONFIG_OWLET_PAN_PULSE_CENTER_US, CONFIG_OWLET_PAN_PULSE_MAX_US,
     CONFIG_OWLET_PAN_LIMIT_MIN_DEG, CONFIG_OWLET_PAN_LIMIT_MAX_DEG);
@@ -101,8 +106,24 @@ extern "C" void app_main(void)
     static ::owlet::core::PanTilt head(pan, tilt);
     // Protocols are plug-ins: to add your own, construct it here and combine
     // them with core::ProtocolMux (docs/DESIGN.md §4.4).
+    static Esp32NvsCalibrationStore calStore;
+    if (!calStore.init())
+    {
+        ESP_LOGE(kTag, "NVS init failed: calibration can't be saved this session");
+    }
+    static ::owlet::core::Calibrator calibrator(pan, tilt, head, calStore,
+                                                ::owlet::core::CalibrationRecord{kPanCal, kTiltCal});
+    calibrator.begin();
+    if (!calibrator.factoryWasValid())
+    {
+        ESP_LOGW(kTag, "Kconfig calibration is invalid; using safe defaults as factory values");
+    }
+    ESP_LOGI(kTag, "calibration: %s",
+             calibrator.source() == ::owlet::core::ICalibration::Source::Saved ? "saved" : "factory");
+
     static Esp32Clock                  clock;
-    static ::owlet::nmea::NmeaProtocol protocol(usb, head, clock, ::owlet::core::kFirmwareVersion);
+    static ::owlet::nmea::NmeaProtocol protocol(usb, head, calibrator, clock,
+                                                ::owlet::core::kFirmwareVersion);
     static ::owlet::core::ControlLoop  loop(usb, head, protocol);
 
     loop.begin(clock.nowMs());

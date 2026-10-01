@@ -54,6 +54,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Plug in and go.** The ESP32-S3's built-in USB shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
 - **Human-readable, checksummed protocol.** NMEA-style lines like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
 - **Know where it is, and when.** Poll the position with `$POS` or stream it at up to 50 Hz. Every report is timestamped with the device clock, and the client maps those timestamps onto your PC's clock, so you can ask "where was the camera pointing when this frame was taken?"
+- **Self-describing.** The head reports its capabilities (`$CAPS`) and its calibration (`$CAL`), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
 - **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
 - **Smooth, speed-limited motion.** Constant-velocity slew from 1 to 500 °/s, timed from the actual elapsed time so it doesn't speed up or slow down with loop timing.
 - **Safe by default.** The servos are limp at power-up and nothing moves until you explicitly enable it.
@@ -62,7 +63,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 267 automated tests: 203 C++ unit and integration tests, plus 64 Python tests, including end-to-end runs against the simulator. Every finding from an adversarial review has a regression test.
+- **Tested.** 319 automated tests: 242 C++ unit and integration tests, plus 77 Python tests, including end-to-end runs against the simulator. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -175,7 +176,7 @@ pip install ./tools/python
 ### 3. Say hello
 
 ```bash
-owlet ping                  # owlet 0.2.0 (protocol v2) on /dev/ttyACM1
+owlet ping                  # owlet 0.3.0 (protocol v3) on /dev/ttyACM1
 owlet enable                # servos energise at center (0, 0)
 owlet move 20 0 --wait      # base turns 20° and the command waits until it's there
 owlet pos                   # where is it?
@@ -208,6 +209,12 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 | `owlet vel PAN TILT` | Velocity mode in °/s (stops after the watchdog period unless repeated) |
 | `owlet watchdog [MS]` | Get or set the velocity watchdog (0 = off, 50–5000 ms) |
 | `owlet clock` | Device clock in ms |
+| `owlet caps` | What the head can do: speed, velocity, watchdog and stream ranges |
+| `owlet cal [pan\|tilt]` | Show the calibration stored on the device |
+| `owlet cal pan --limits -85 90` | Change soft limits (works while enabled) |
+| `owlet cal tilt --reverse` | Flip an axis's direction (servos must be disabled) |
+| `owlet cal tilt --pulses 550 1480 2420` | Set pulse endpoints (servos must be disabled) |
+| `owlet cal save` / `owlet cal reset` | Store the calibration in flash / restore factory values |
 | `owlet watch [--hz N]` | Live position stream until Ctrl-C |
 | `owlet shell` | Interactive prompt: type `move 30 -15`, `speed 45`, `pos`, … |
 
@@ -300,7 +307,7 @@ owlet -p /tmp/owlet watch
 
 | Request | Reply | Notes |
 |---------|-------|-------|
-| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,2,0.2.0` |
+| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.3.0` |
 | `$ENABLE` | `$ACK,ENABLE` | Energise at the last known position (0, 0 after boot) |
 | `$ENABLE,<pan>,<tilt>` | `$ACK,ENABLE` | Energise at a pose; if already enabled, moves there smoothly instead |
 | `$DISABLE` | `$ACK,DISABLE` | Servos limp |
@@ -316,8 +323,12 @@ owlet -p /tmp/owlet watch
 | `$VEL,<pan°/s>,<tilt°/s>` | `$ACK,VEL` | Velocity mode, each −500…500; stops at soft limits; ended by any position command |
 | `$WATCHDOG` / `$WATCHDOG,<ms>` | `$WATCHDOG,<ms>` / `$ACK,WATCHDOG` | Velocity watchdog: 0 = off, 50–5000 ms, default 500 |
 | `$CLOCK` | `$CLOCK,<ms>` | Device uptime in ms (wraps after ~49.7 days) |
+| `$CAPS` | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Capabilities, e.g. `$CAPS,1.0,500.0,500.0,50,5000,50` |
+| `$CAL,<AXIS>` | `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>,<R\|N>,<F\|S\|M>` | Calibration of `PAN`/`TILT`: reversed or not; factory / saved / modified |
+| `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>` | `$ACK,CAL` | Set it. Pulse changes need the servos disabled (`NAK,CAL,ENA`); limits can change any time |
+| `$CAL,SAVE` / `$CAL,RESET` | `$ACK,CAL` | Persist to flash / restore factory values and erase (reset needs disabled) |
 
-Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v2** (owlet 0.2.0); clients should check the version in `$PONG`.
+Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v3** (owlet 0.3.0); clients should check the version in `$PONG`.
 
 ### Messages owlet sends on its own
 
@@ -337,6 +348,8 @@ Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have
 | `$NAK,<CMD>,RNG` | Value out of range |
 | `$NAK,<CMD>,DIS` | Servos are disabled; send `ENABLE` first |
 | `$NAK,<CMD>,BUS` | PCA9685 didn't respond (check wiring and power) |
+| `$NAK,CAL,ENA` | Pulse calibration can only change while the servos are disabled |
+| `$NAK,CAL,STO` | Saving to (or erasing from) flash failed |
 | `$ERR,CHK` | Checksum mismatch |
 | `$ERR,SYN` | Not a valid `$…*HH` frame |
 | `$ERR,LEN` | Line longer than 82 bytes |
@@ -407,22 +420,32 @@ git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
 
 ## Configuration and calibration
 
-Settings live in ESP-IDF's Kconfig, under the **owlet configuration** menu (`idf.py menuconfig` inside `apps/esp32-owlet`). You can also put them in a local `apps/esp32-owlet/sdkconfig.defaults.local` file (copy the [`.example`](apps/esp32-owlet/sdkconfig.defaults.local.example)). That file is git-ignored, so your per-build values stay out of the repo.
+Calibration lives **on the device**, in flash. Every client can read it (`$CAL`, `$LIMITS`, `$CAPS`), and changing it never needs a rebuild:
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `OWLET_I2C_SDA_GPIO` / `OWLET_I2C_SCL_GPIO` | 1 / 2 | I²C pins |
-| `OWLET_PAN_CHANNEL` / `OWLET_TILT_CHANNEL` | 0 / 1 | PCA9685 channels |
-| `OWLET_<AXIS>_PULSE_MIN_US` | 500 | Pulse at −90° |
-| `OWLET_<AXIS>_PULSE_CENTER_US` | 1500 | Pulse at 0° |
-| `OWLET_<AXIS>_PULSE_MAX_US` | 2500 | Pulse at +90° |
-| `OWLET_<AXIS>_LIMIT_MIN_DEG` / `_MAX_DEG` | −90 / 90 | Soft limits; commands outside them are refused |
+```bash
+owlet cal                                  # show both axes
+owlet disable                              # pulse changes need the servos limp
+owlet cal tilt --reverse                   # this tilt servo is mounted mirrored
+owlet cal pan --limits -85 90              # keep pan off its left end stop
+owlet cal save                             # store it; survives power cycles and reflashing
+```
 
-- **Axis moves the wrong way?** Swap its `PULSE_MIN_US` and `PULSE_MAX_US`.
-- **Mechanism collides before ±90°?** Narrow the soft limits.
-- **0° isn't quite centered?** Adjust `PULSE_CENTER_US`. The mapping bends at center, so this doesn't disturb the endpoints.
+```
+pan   pulses 500/1500/2500 us   limits -85.0..90.0 deg   normal     (saved)
+tilt  pulses 2500/1500/500 us   limits -90.0..90.0 deg   reversed   (saved)
+```
 
-Many servos reach their physical end stop before 500 or 2500 µs. Measure yours with the step-by-step procedure in [`docs/CALIBRATION.md`](docs/CALIBRATION.md).
+| Per axis | Meaning | Factory default |
+|----------|---------|-----------------|
+| pulses `min/center/max` | Pulse width (µs) at −90° / 0° / +90°. Swap min and max to reverse the axis. | 500 / 1500 / 2500 |
+| limits `min..max` | Soft limits in degrees. Commands outside them are refused (`MOVE`) or clamped (`NUDGE`, velocity mode). | −90 .. 90 |
+
+- **Axis moves the wrong way?** Run `owlet cal <axis> --reverse` with the servos disabled.
+- **Mechanism collides before ±90°?** Narrow the limits. This works even while enabled, and the head backs away inside the new limits.
+- **0° isn't quite centred?** Adjust the centre pulse (`--pulses`). The mapping bends at the centre, so the endpoints don't move.
+- `owlet cal reset` goes back to the factory values. Those come from Kconfig (`idf.py menuconfig` → **owlet configuration**), along with the I²C pins and PCA9685 channels.
+
+Many servos reach their physical end stop before 500 or 2500 µs. The step-by-step procedure is in [`docs/CALIBRATION.md`](docs/CALIBRATION.md).
 
 ### Mounting the servo horns
 
@@ -504,7 +527,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 
 ## Project status and roadmap
 
-**v0.2.0, alpha.** The firmware, protocol, PC client, tracking support and simulator are complete and tested. Basic motion (v0.1) has been verified on real hardware; v0.2's velocity mode and watchdog are verified in the simulator and not yet on hardware.
+**v0.3.0, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. Motion, directions and ranges have been verified on the reference head. Velocity mode and the watchdog are verified in the simulator but not yet on hardware.
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection
@@ -512,6 +535,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 - [x] First motion on hardware
 - [x] Pluggable protocol architecture (`IProtocol`, `ProtocolMux`)
 - [x] Tracking support: velocity mode, watchdog, timestamped pose, clock sync, `Tracker`, `PixelController`
+- [x] On-device calibration and capabilities (`$CAL`, `$CAPS`)
 - [ ] Verify velocity mode and watchdog on hardware
 - [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))

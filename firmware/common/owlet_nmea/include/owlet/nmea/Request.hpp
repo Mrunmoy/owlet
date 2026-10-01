@@ -2,6 +2,7 @@
 
 #include "owlet/nmea/Sentence.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -25,6 +26,8 @@ enum class Command : uint8_t
     Vel,
     Watchdog,
     Clock,
+    Caps,
+    Cal,
 };
 
 enum class RequestStatus : uint8_t
@@ -34,15 +37,19 @@ enum class RequestStatus : uint8_t
     Unknown,     // command name not recognised → ERR UNK
 };
 
-// A parsed request. Numeric arguments land in a/b in field order; range
-// checking is the executor's job because limits are configuration.
+// A parsed request. Numeric arguments land in `args` in field order; range
+// checking is the executor's job because limits are configuration. `token`
+// holds a leading word argument (CAL's axis or action) and points into the
+// frame buffer, so it is only valid while that frame is.
 struct Request
 {
-    Command       command{Command::Ping};
-    RequestStatus status{RequestStatus::Unknown};
-    std::size_t   argCount{0};
-    float         a{0.0f};
-    float         b{0.0f};
+    static constexpr std::size_t kMaxArgs = 5;
+
+    Command                         command{Command::Ping};
+    RequestStatus                   status{RequestStatus::Unknown};
+    std::size_t                     argCount{0};
+    std::array<float, kMaxArgs>     args{};
+    std::string_view                token;
 };
 
 [[nodiscard]] RequestStatus parseRequest(const Sentence& sentence, Request& out);

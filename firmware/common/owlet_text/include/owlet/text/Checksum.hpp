@@ -4,12 +4,12 @@
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 inline constexpr uint8_t kProtocolVersion = 3;
 
-// Longest frame on the wire including '$' and the trailing CRLF (NMEA 0183).
+// Longest frame on the wire including '$' and the trailing CRLF.
 inline constexpr std::size_t kMaxLineLen = 82;
 // Longest frame as seen by the parser: '$' .. checksum, CRLF stripped.
 inline constexpr std::size_t kMaxFrameLen = kMaxLineLen - 2;
@@ -27,4 +27,4 @@ inline constexpr std::size_t kMaxFrameLen = kMaxLineLen - 2;
 
 static_assert(checksum("PING") == 0x10, "checksum must match the protocol vectors");
 
-} // namespace owlet::nmea
+} // namespace owlet::text

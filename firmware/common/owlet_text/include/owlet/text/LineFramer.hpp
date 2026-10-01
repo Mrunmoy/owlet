@@ -1,13 +1,13 @@
 #pragma once
 
-#include "owlet/nmea/Checksum.hpp"
+#include "owlet/text/Checksum.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 // Turns a raw byte stream into '$'-delimited frames (CR/LF stripped).
@@ -54,4 +54,4 @@ private:
     State                          m_state{State::Idle};
 };
 
-} // namespace owlet::nmea
+} // namespace owlet::text

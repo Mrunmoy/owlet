@@ -1,8 +1,8 @@
-#include "owlet/nmea/Checksum.hpp"
-#include "owlet/nmea/LineFramer.hpp"
-#include "owlet/nmea/LineWriter.hpp"
-#include "owlet/nmea/Request.hpp"
-#include "owlet/nmea/Sentence.hpp"
+#include "owlet/text/Checksum.hpp"
+#include "owlet/text/LineFramer.hpp"
+#include "owlet/text/LineWriter.hpp"
+#include "owlet/text/Request.hpp"
+#include "owlet/text/Sentence.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-using namespace ::owlet::nmea;
+using namespace ::owlet::text;
 
 namespace
 {

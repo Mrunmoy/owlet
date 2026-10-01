@@ -8,7 +8,7 @@
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
-#include "owlet/nmea/NmeaProtocol.hpp"
+#include "owlet/text/TextProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
 #include "owlet/platform/esp32/Esp32Clock.hpp"
 #include "owlet/platform/esp32/Esp32Delay.hpp"
@@ -122,7 +122,7 @@ extern "C" void app_main(void)
              calibrator.source() == ::owlet::core::ICalibration::Source::Saved ? "saved" : "factory");
 
     static Esp32Clock                  clock;
-    static ::owlet::nmea::NmeaProtocol protocol(usb, head, calibrator, clock,
+    static ::owlet::text::TextProtocol protocol(usb, head, calibrator, clock,
                                                 ::owlet::core::kFirmwareVersion);
     static ::owlet::core::ControlLoop  loop(usb, head, protocol);
 

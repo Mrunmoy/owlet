@@ -49,26 +49,52 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 
 ### 4.1 Layers and interfaces
 
+```mermaid
+flowchart TB
+    APP["Composition roots · apps/esp32-owlet, apps/host-sim<br/>construct and inject; no logic"]
+    LOOP["ControlLoop<br/>tick → onTick → feed input"]
+
+    subgraph PROTOS["Protocols · implement IProtocol"]
+        direction LR
+        TEXT["TextProtocol<br/>owlet_text"]
+        MUX["ProtocolMux#lt;N#gt;<br/>several on one port"]
+        YOURS["your protocol<br/>Pelco-D, G-code, binary…"]
+    end
+
+    subgraph HEAD["Head · owlet_core"]
+        direction LR
+        PT["PanTilt<br/>implements IPanTilt, ITickable"]
+        CALIB["Calibrator<br/>implements ICalibration"]
+    end
+
+    SERVO["Servo · owlet_servo<br/>angle ↔ pulse, slew, velocity"]
+
+    subgraph PORTS["Platform interfaces"]
+        direction LR
+        CH["IServoChannel"]
+        IO["IByteSource · IByteSink"]
+        CLK["IClock"]
+        STO["ICalibrationStore"]
+    end
+
+    subgraph IMPL["Implementations"]
+        direction LR
+        PCA["PCA9685::Channel<br/>owlet_pca9685"]
+        ESP["Esp32UsbSerial · Esp32Clock<br/>Esp32NvsCalibrationStore"]
+        SIM["owlet_sim: pty + file store<br/>test fakes"]
+    end
+
+    APP --> LOOP
+    LOOP -->|"input bytes"| PROTOS
+    LOOP -->|"tick(dt)"| PT
+    PROTOS -->|"IPanTilt · ICalibration"| HEAD
+    PROTOS -->|"replies, time"| PORTS
+    PT --> SERVO --> CH
+    CALIB --> STO
+    PORTS -.->|"implemented by"| IMPL
 ```
- apps/esp32-owlet, apps/host-sim          composition roots: construct + inject, no logic
-        │
-        ├── ControlLoop ──────────────► ITickable (motion)      IByteSource (input)
-        │        │
-        │        ▼
-        │   IProtocol ◄── ProtocolMux<N>   (composite: several protocols, one port)
-        │        ▲
-        │        ├── nmea::NmeaProtocol    owlet native "$…*HH" protocol  (owlet_nmea)
-        │        └── your protocol         implement IProtocol, inject it (Pelco-D, G-code, binary, …)
-        │                 │
-        │                 ▼  (protocols depend only on these abstractions)
-        │            IPanTilt  ─────────── IByteSink (output)
-        │                 ▲
-        ├── PanTilt : IPanTilt, ITickable           owlet_core
-        │       └── Servo ── IServoChannel           owlet_servo
-        │                        ▲
-        ├── PCA9685::Channel ────┘                   owlet_pca9685 ── II2CBus, IDelayProvider
-        └── Esp32UsbSerial : IByteSource, IByteSink  owlet_esp32
-```
+
+Solid arrows mean "uses"; the dotted arrow leads to the implementations of the platform interfaces. Protocols depend only on interfaces (`IPanTilt`, `ICalibration`, `IByteSink`, `IClock`), never on a concrete head or platform. (`ICalibrationStore` is declared in `owlet_core`; the others are in `owlet_hal`.)
 
 | Interface | Owner | Role |
 |-----------|-------|------|
@@ -118,8 +144,8 @@ class IProtocol {
 };
 ```
 
-- `consume()` returns how many bytes it took and `released = true` at the end of each frame (for line protocols, at CR/LF). It may also return `{0, released}` to mean **"this byte isn't mine"**: the mux offers that byte to the other protocols. `NmeaProtocol` does this on any non-text byte, so a stray `$` can't lock a binary protocol out, and it releases on overflow. Returning `{0, not released}` is a contract violation; the caller drops the byte.
-- `claims()` is only used by `ProtocolMux`. Native frames are claimed on `$` anywhere, which keeps NMEA's resync behaviour. A line protocol such as G-code would claim only at line start (`atLineStart`), and a binary protocol such as Pelco-D would claim its `0xFF` sync byte anywhere.
+- `consume()` returns how many bytes it took and `released = true` at the end of each frame (for line protocols, at CR/LF). It may also return `{0, released}` to mean **"this byte isn't mine"**: the mux offers that byte to the other protocols. `TextProtocol` does this on any non-text byte, so a stray `$` can't lock a binary protocol out, and it releases on overflow. Returning `{0, not released}` is a contract violation; the caller drops the byte.
+- `claims()` is only used by `ProtocolMux`. Native frames are claimed on `$` anywhere, so a garbled line resyncs at the next `$`. A line protocol such as G-code would claim only at line start (`atLineStart`), and a binary protocol such as Pelco-D would claim its `0xFF` sync byte anywhere.
 - `ProtocolMux<N>` offers each frame's first byte to its protocols in order. The first one that claims it owns the stream until it releases. A byte nobody claims is returned to the caller and dropped. That is how the ROM boot banner is discarded: its bytes are dropped one at a time, except a `$`, which the native protocol claims anywhere. The mux feeds whole chunks to the owner, so each chunk costs one virtual call rather than one per byte.
 - "Line start" is true after a CR/LF and at power-up. A nested mux adopts its parent's line-start state (passed through `claims()`), so nested arbitration matches the outer one.
 - The mux is itself an `IProtocol` (composite), so a single protocol and a mux are interchangeable at the composition root.
@@ -129,7 +155,7 @@ class IProtocol {
 1. Create a component (e.g. `firmware/common/my_proto/`) that depends on `owlet_core` only.
 2. Implement `IProtocol`. Take `IPanTilt&` and `IByteSink&` in the constructor.
 3. In `apps/esp32-owlet/main/main.cpp`, construct it and add it to the `ProtocolMux` (or pass it to `ControlLoop` directly if it should be the only protocol).
-4. Unit-test it on the host with a real `PanTilt` over `FakeServoChannel`, or with your own `IPanTilt` fake. See `tests/test_nmea_protocol.cpp` for the pattern.
+4. Unit-test it on the host with a real `PanTilt` over `FakeServoChannel`, or with your own `IPanTilt` fake. See `tests/test_text_protocol.cpp` for the pattern.
 
 ### 4.5 Efficiency
 
@@ -140,7 +166,7 @@ class IProtocol {
 
 ### 4.6 Using owlet as a submodule
 
-- **Host CMake:** `add_subdirectory(owlet)` gives the `owlet::hal`, `owlet::pca9685`, `owlet::servo`, `owlet::core` and `owlet::nmea` targets. Tests and the simulator are built only when owlet is the top-level project (`OWLET_BUILD_TESTS` defaults to `PROJECT_IS_TOP_LEVEL`).
+- **Host CMake:** `add_subdirectory(owlet)` gives the `owlet::hal`, `owlet::pca9685`, `owlet::servo`, `owlet::core` and `owlet::text` targets. Tests and the simulator are built only when owlet is the top-level project (`OWLET_BUILD_TESTS` defaults to `PROJECT_IS_TOP_LEVEL`).
 - **ESP-IDF:** `include(owlet/cmake/owlet-idf-components.cmake)` and append `${OWLET_IDF_COMPONENT_DIRS}` to `EXTRA_COMPONENT_DIRS`. The bundled app uses this same list.
 - **Python:** `pip install ./owlet/tools/python`, or `pip install -e` for development.
 
@@ -159,7 +185,7 @@ $<BODY>*<CK>\r\n
 - `BODY` = `NAME[,field]*`. `NAME` is upper-case ASCII letters. Fields are printable ASCII excluding `$`, `*` and `,`.
 - `CK` = XOR of every byte of `BODY` (between `$` and `*`, both excluded), as two hex digits. The device always emits upper-case; it accepts either case.
 - The line ends with `\n`, and a preceding `\r` is optional. The device always sends `\r\n`.
-- The maximum frame length is **82 bytes**, including `$` and `\r\n` (same as NMEA 0183).
+- The maximum frame length is **82 bytes**, including `$` and `\r\n`.
 - Bytes outside a frame are ignored. A `$` in the middle of a frame discards the partial frame and starts a new one.
 - The checksum is **mandatory** in both directions.
 
@@ -302,11 +328,11 @@ Hobby servos have no feedback. The reported position is the **commanded pulse** 
 
 Opening the port: on Linux (verified on hardware, 2026-10-01), opening the USB-Serial-JTAG port with pyserial's defaults (DTR/RTS asserted) does **not** reset the chip. Toggling DTR/RTS individually can, because that is the auto-reset signal `esptool` uses. Clients shouldn't touch the modem lines.
 
-`apps/host-sim/owlet_sim` runs the real `ControlLoop` + `NmeaProtocol` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it.
+`apps/host-sim/owlet_sim` runs the real `ControlLoop` + `TextProtocol` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it.
 
 ## 8. Testing strategy
 
-- **Unit (GTest):** Servo, the NMEA codec (checksum, framer, parser, writer), PanTilt, ProtocolMux and ControlLoop (with fake protocols, tickers and ports), and NmeaProtocol (fake serial + fake clock).
+- **Unit (GTest):** Servo, the text protocol codec (checksum, framer, parser, writer), PanTilt, ProtocolMux and ControlLoop (with fake protocols, tickers and ports), and TextProtocol (fake serial + fake clock).
 - **Integration (GTest):** the real driver stack over `VirtualI2CBus` + `PCA9685Simulator`, asserting on the PWM counts the chip would output.
 - **Cross-language:** C++ and Python both validate `docs/protocol_vectors.txt`.
 - **End-to-end:** the Python client drives `owlet_sim` over a pty.

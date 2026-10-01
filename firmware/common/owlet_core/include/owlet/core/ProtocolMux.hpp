@@ -18,7 +18,7 @@ namespace owlet::core
 // drops them (boot banners, line noise). The mux is itself an IProtocol, so it can stand anywhere a single
 // protocol can, including inside another mux.
 //
-//   NmeaProtocol   native(usb, head, version);
+//   TextProtocol   native(usb, head, version);
 //   MyProtocol     mine(usb, head);
 //   ProtocolMux<2> mux({&native, &mine});
 //   ControlLoop    loop(usb, head, mux);

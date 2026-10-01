@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run the owlet CLI straight from this checkout, without installing it.
+# `nix develop` puts this directory on PATH. Elsewhere, either call it by
+# path or `pip install ./tools/python` to get a real `owlet` command.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$here/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m owlet "$@"

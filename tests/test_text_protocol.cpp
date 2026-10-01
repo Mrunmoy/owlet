@@ -5,8 +5,8 @@
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
-#include "owlet/nmea/LineWriter.hpp"
-#include "owlet/nmea/NmeaProtocol.hpp"
+#include "owlet/text/LineWriter.hpp"
+#include "owlet/text/TextProtocol.hpp"
 
 #include <gtest/gtest.h>
 
@@ -15,9 +15,9 @@
 
 using ::owlet::Servo;
 using ::owlet::core::ControlLoop;
-using ::owlet::nmea::NmeaProtocol;
+using ::owlet::text::TextProtocol;
 using ::owlet::core::PanTilt;
-using ::owlet::nmea::LineWriter;
+using ::owlet::text::LineWriter;
 using ::owlet::test::FakeClock;
 using ::owlet::test::FakeSerialPort;
 using ::owlet::test::FakeServoChannel;
@@ -56,7 +56,7 @@ struct Rig
     uint32_t&        now = clock.t;
     ::owlet::test::FakeCalibrationStore store;
     ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
-    NmeaProtocol     proto{port, head, calib, clock, "0.1.0"};
+    TextProtocol     proto{port, head, calib, clock, "0.1.0"};
     ControlLoop      proc{port, head, proto};
 
     Rig()
@@ -93,7 +93,7 @@ struct Rig
 
 } // namespace
 
-TEST(NmeaProtocol, AnnouncesReadyOnBegin)
+TEST(TextProtocol, AnnouncesReadyOnBegin)
 {
     FakeServoChannel a;
     FakeServoChannel b;
@@ -104,31 +104,31 @@ TEST(NmeaProtocol, AnnouncesReadyOnBegin)
     FakeClock        clock;
     ::owlet::test::FakeCalibrationStore store;
     ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
-    NmeaProtocol     proto{port, head, calib, clock, "0.1.0"};
+    TextProtocol     proto{port, head, calib, clock, "0.1.0"};
     proto.begin(0);
     EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("READY,3,0.1.0")});
 }
 
-TEST(NmeaProtocol, PingReturnsVersions)
+TEST(TextProtocol, PingReturnsVersions)
 {
     Rig r;
     EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
-TEST(NmeaProtocol, PosReportsDisabledAtBoot)
+TEST(TextProtocol, PosReportsDisabledAtBoot)
 {
     Rig r;
     EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,0.0,0.0,0.0,0.0,D")});
 }
 
-TEST(NmeaProtocol, MoveWhileDisabledIsNakDis)
+TEST(TextProtocol, MoveWhileDisabledIsNakDis)
 {
     Rig r;
     EXPECT_EQ(r.send("MOVE,10,10"), std::vector<std::string>{line("NAK,MOVE,DIS")});
     EXPECT_TRUE(r.panCh.writes.empty());
 }
 
-TEST(NmeaProtocol, EnableMoveArriveSequence)
+TEST(TextProtocol, EnableMoveArriveSequence)
 {
     Rig r;
     EXPECT_EQ(r.send("ENABLE"), std::vector<std::string>{line("ACK,ENABLE")});
@@ -144,7 +144,7 @@ TEST(NmeaProtocol, EnableMoveArriveSequence)
     EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,30.0,-15.0,30.0,-15.0,H")});
 }
 
-TEST(NmeaProtocol, ArrivedFiresEvenForZeroLengthMove)
+TEST(TextProtocol, ArrivedFiresEvenForZeroLengthMove)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -153,7 +153,7 @@ TEST(NmeaProtocol, ArrivedFiresEvenForZeroLengthMove)
     EXPECT_TRUE(r.advance(100).empty());
 }
 
-TEST(NmeaProtocol, StopCancelsPendingArrival)
+TEST(TextProtocol, StopCancelsPendingArrival)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -163,7 +163,7 @@ TEST(NmeaProtocol, StopCancelsPendingArrival)
     EXPECT_TRUE(r.advance(2000).empty());
 }
 
-TEST(NmeaProtocol, RangeAndFormatErrors)
+TEST(TextProtocol, RangeAndFormatErrors)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -174,7 +174,7 @@ TEST(NmeaProtocol, RangeAndFormatErrors)
     EXPECT_EQ(r.send("FLY"), std::vector<std::string>{line("ERR,UNK")});
 }
 
-TEST(NmeaProtocol, FrameLevelErrors)
+TEST(TextProtocol, FrameLevelErrors)
 {
     Rig r;
     r.port.rx += "$PING*11\r\n";
@@ -185,14 +185,14 @@ TEST(NmeaProtocol, FrameLevelErrors)
               (std::vector<std::string>{line("ERR,CHK"), line("ERR,SYN"), line("ERR,LEN")}));
 }
 
-TEST(NmeaProtocol, IgnoresBootNoiseBeforeFirstFrame)
+TEST(TextProtocol, IgnoresBootNoiseBeforeFirstFrame)
 {
     Rig r;
     r.port.rx += "ESP-ROM:esp32s3\r\nbuild: Mar 27 2021\r\n";
     EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
-TEST(NmeaProtocol, SeveralRequestsInOneReadAnsweredInOrder)
+TEST(TextProtocol, SeveralRequestsInOneReadAnsweredInOrder)
 {
     Rig r;
     r.port.rx += frame("PING") + frame("LIMITS") + frame("SPEED");
@@ -203,7 +203,7 @@ TEST(NmeaProtocol, SeveralRequestsInOneReadAnsweredInOrder)
                                         line("SPEED,90.0")}));
 }
 
-TEST(NmeaProtocol, StreamEmitsPosAtRequestedRate)
+TEST(TextProtocol, StreamEmitsPosAtRequestedRate)
 {
     Rig r;
     EXPECT_EQ(r.send("STREAM,10"), std::vector<std::string>{line("ACK,STREAM")});
@@ -224,7 +224,7 @@ TEST(NmeaProtocol, StreamEmitsPosAtRequestedRate)
     EXPECT_TRUE(r.advance(1000).empty());
 }
 
-TEST(NmeaProtocol, DisableGoesLimpAndReportsD)
+TEST(TextProtocol, DisableGoesLimpAndReportsD)
 {
     Rig r;
     (void) r.send("ENABLE,20,10");
@@ -233,14 +233,14 @@ TEST(NmeaProtocol, DisableGoesLimpAndReportsD)
     EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,20.0,10.0,20.0,10.0,D")});
 }
 
-TEST(NmeaProtocol, EnableBusFailureIsNakBus)
+TEST(TextProtocol, EnableBusFailureIsNakBus)
 {
     Rig r;
     r.panCh.failNext = true;
     EXPECT_EQ(r.send("ENABLE"), std::vector<std::string>{line("NAK,ENABLE,BUS")});
 }
 
-TEST(NmeaProtocol, SlewBusFailureReportsErrBusOnceUntilRecovered)
+TEST(TextProtocol, SlewBusFailureReportsErrBusOnceUntilRecovered)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -251,7 +251,7 @@ TEST(NmeaProtocol, SlewBusFailureReportsErrBusOnceUntilRecovered)
     EXPECT_EQ(rest, std::vector<std::string>{line("ARRIVED,10.0,0.0")});
 }
 
-TEST(NmeaProtocol, LargeTimeGapIsCappedSoHeadDoesNotJump)
+TEST(TextProtocol, LargeTimeGapIsCappedSoHeadDoesNotJump)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -263,7 +263,7 @@ TEST(NmeaProtocol, LargeTimeGapIsCappedSoHeadDoesNotJump)
     EXPECT_LE(r.head.position().pan, 100.0f * PanTilt::kMaxStepMs / 1000.0f + 1e-3f);
 }
 
-TEST(NmeaProtocol, ClaimsDollarAnywhereAndNothingElse)
+TEST(TextProtocol, ClaimsDollarAnywhereAndNothingElse)
 {
     Rig r;
     EXPECT_TRUE(r.proto.claims('$', true));
@@ -272,7 +272,7 @@ TEST(NmeaProtocol, ClaimsDollarAnywhereAndNothingElse)
     EXPECT_FALSE(r.proto.claims('\n', true));
 }
 
-TEST(NmeaProtocol, ReleasesStreamAtEndOfLine)
+TEST(TextProtocol, ReleasesStreamAtEndOfLine)
 {
     Rig r;
     const std::string f = frame("PING");
@@ -288,13 +288,13 @@ TEST(NmeaProtocol, ReleasesStreamAtEndOfLine)
 
 // ── Protocol v2: velocity, watchdog, clock ──────────────────────────────────
 
-TEST(NmeaProtocol, VelocityRequiresEnable)
+TEST(TextProtocol, VelocityRequiresEnable)
 {
     Rig r;
     EXPECT_EQ(r.send("VEL,10,0"), std::vector<std::string>{line("NAK,VEL,DIS")});
 }
 
-TEST(NmeaProtocol, VelocityMovesWithoutArrival)
+TEST(TextProtocol, VelocityMovesWithoutArrival)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -305,7 +305,7 @@ TEST(NmeaProtocol, VelocityMovesWithoutArrival)
     EXPECT_TRUE(r.advance(2000).empty());  // no ARRIVED, no TIMEOUT
 }
 
-TEST(NmeaProtocol, VelocityErrors)
+TEST(TextProtocol, VelocityErrors)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -313,7 +313,7 @@ TEST(NmeaProtocol, VelocityErrors)
     EXPECT_EQ(r.send("VEL,1"), std::vector<std::string>{line("NAK,VEL,FMT")});
 }
 
-TEST(NmeaProtocol, WatchdogTimeoutIsReportedOnce)
+TEST(TextProtocol, WatchdogTimeoutIsReportedOnce)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -323,7 +323,7 @@ TEST(NmeaProtocol, WatchdogTimeoutIsReportedOnce)
     EXPECT_TRUE(r.advance(1000).empty());
 }
 
-TEST(NmeaProtocol, WatchdogQueryAndSet)
+TEST(TextProtocol, WatchdogQueryAndSet)
 {
     Rig r;
     EXPECT_EQ(r.send("WATCHDOG"), std::vector<std::string>{line("WATCHDOG,500")});
@@ -334,7 +334,7 @@ TEST(NmeaProtocol, WatchdogQueryAndSet)
     EXPECT_EQ(r.send("WATCHDOG,0"), std::vector<std::string>{line("ACK,WATCHDOG")});
 }
 
-TEST(NmeaProtocol, VelocityCancelsPendingArrival)
+TEST(TextProtocol, VelocityCancelsPendingArrival)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -343,7 +343,7 @@ TEST(NmeaProtocol, VelocityCancelsPendingArrival)
     EXPECT_TRUE(r.advance(3000).empty());
 }
 
-TEST(NmeaProtocol, ClockReportsCurrentTimeNotTickTime)
+TEST(TextProtocol, ClockReportsCurrentTimeNotTickTime)
 {
     Rig r;
     r.proc.service(r.now);
@@ -354,7 +354,7 @@ TEST(NmeaProtocol, ClockReportsCurrentTimeNotTickTime)
     EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("CLOCK,1007")});
 }
 
-TEST(NmeaProtocol, PosIsStampedWithTheTickThatProducedIt)
+TEST(TextProtocol, PosIsStampedWithTheTickThatProducedIt)
 {
     Rig r;
     r.proc.service(r.now);  // pose computed at t=1000
@@ -366,7 +366,7 @@ TEST(NmeaProtocol, PosIsStampedWithTheTickThatProducedIt)
 
 // ── Review findings (adversarial review 2026-10-01) ─────────────────────────
 
-TEST(NmeaProtocolReview, BareEnableDuringVelocityDoesNotArmArrival)  // M1
+TEST(TextProtocolReview, BareEnableDuringVelocityDoesNotArmArrival)  // M1
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -375,7 +375,7 @@ TEST(NmeaProtocolReview, BareEnableDuringVelocityDoesNotArmArrival)  // M1
     EXPECT_EQ(r.advance(1000), std::vector<std::string>{line("TIMEOUT,VEL")});  // no ARRIVED
 }
 
-TEST(NmeaProtocolReview, EnableAtPoseWhileEnabledAlwaysArrives)  // M1
+TEST(TextProtocolReview, EnableAtPoseWhileEnabledAlwaysArrives)  // M1
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -383,14 +383,14 @@ TEST(NmeaProtocolReview, EnableAtPoseWhileEnabledAlwaysArrives)  // M1
     EXPECT_EQ(r.advance(10), std::vector<std::string>{line("ARRIVED,0.0,0.0")});
 }
 
-TEST(NmeaProtocolReview, EnableFromDisabledNeverArrives)  // M1
+TEST(TextProtocolReview, EnableFromDisabledNeverArrives)  // M1
 {
     Rig r;
     (void) r.send("ENABLE,10,10");
     EXPECT_TRUE(r.advance(500).empty());
 }
 
-TEST(NmeaProtocolReview, StrayDollarBeforeBinaryIsHandedBackSilently)  // M2
+TEST(TextProtocolReview, StrayDollarBeforeBinaryIsHandedBackSilently)  // M2
 {
     Rig r;
     const std::string in = std::string("$") + '\xFF';
@@ -401,7 +401,7 @@ TEST(NmeaProtocolReview, StrayDollarBeforeBinaryIsHandedBackSilently)  // M2
     EXPECT_TRUE(r.port.takeLines().empty());
 }
 
-TEST(NmeaProtocolReview, GarbledRequestStillGetsAReply)  // N1
+TEST(TextProtocolReview, GarbledRequestStillGetsAReply)  // N1
 {
     for (const std::string& bad : {std::string("$MOVE,1\xC2\xB0,2*00\r\n"),  // UTF-8 degree sign
                                    std::string("$PING\x7F*10\r\n"),
@@ -416,7 +416,7 @@ TEST(NmeaProtocolReview, GarbledRequestStillGetsAReply)  // N1
     }
 }
 
-TEST(NmeaProtocolReview, NonTextInsideAFrameHandsTheByteBackAfterReporting)  // N1 + M2
+TEST(TextProtocolReview, NonTextInsideAFrameHandsTheByteBackAfterReporting)  // N1 + M2
 {
     Rig r;
     const std::string in = std::string("$PI") + '\xFF' + "NG";
@@ -427,7 +427,7 @@ TEST(NmeaProtocolReview, NonTextInsideAFrameHandsTheByteBackAfterReporting)  // 
     EXPECT_EQ(r.port.takeLines(), std::vector<std::string>{line("ERR,SYN")});
 }
 
-TEST(NmeaProtocolReview, OverflowHandsTheStreamBack)  // M2
+TEST(TextProtocolReview, OverflowHandsTheStreamBack)  // M2
 {
     Rig r;
     const std::string in = "$" + std::string(100, 'A');
@@ -439,20 +439,20 @@ TEST(NmeaProtocolReview, OverflowHandsTheStreamBack)  // M2
 
 // ── Protocol v3: capabilities and calibration ───────────────────────────────
 
-TEST(NmeaCalibration, CapsReportsMotionRanges)
+TEST(TextCalibration, CapsReportsMotionRanges)
 {
     Rig r;
     EXPECT_EQ(r.send("CAPS"), std::vector<std::string>{line("CAPS,1.0,500.0,500.0,50,5000,50")});
 }
 
-TEST(NmeaCalibration, CalQueryReportsAxisCalibration)
+TEST(TextCalibration, CalQueryReportsAxisCalibration)
 {
     Rig r;
     EXPECT_EQ(r.send("CAL,PAN"),
               std::vector<std::string>{line("CAL,PAN,500,1500,2500,-90.0,90.0,N,F")});
 }
 
-TEST(NmeaCalibration, SetReverseSaveAndQuery)
+TEST(TextCalibration, SetReverseSaveAndQuery)
 {
     Rig r;
     EXPECT_EQ(r.send("CAL,TILT,2500,1500,500,-90,90"), std::vector<std::string>{line("ACK,CAL")});
@@ -464,7 +464,7 @@ TEST(NmeaCalibration, SetReverseSaveAndQuery)
               std::vector<std::string>{line("CAL,TILT,2500,1500,500,-90.0,90.0,R,S")});
 }
 
-TEST(NmeaCalibration, LimitsChangeWhileEnabledAndShowInLimits)
+TEST(TextCalibration, LimitsChangeWhileEnabledAndShowInLimits)
 {
     Rig r;
     (void) r.send("ENABLE");
@@ -472,7 +472,7 @@ TEST(NmeaCalibration, LimitsChangeWhileEnabledAndShowInLimits)
     EXPECT_EQ(r.send("LIMITS"), std::vector<std::string>{line("LIMITS,-85.0,90.0,-90.0,90.0")});
 }
 
-TEST(NmeaCalibration, Errors)
+TEST(TextCalibration, Errors)
 {
     Rig r;
     EXPECT_EQ(r.send("CAL,PAN,300,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
@@ -487,7 +487,7 @@ TEST(NmeaCalibration, Errors)
     EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("NAK,CAL,STO")});
 }
 
-TEST(NmeaCalibration, ResetRestoresFactory)
+TEST(TextCalibration, ResetRestoresFactory)
 {
     Rig r;
     (void) r.send("CAL,TILT,2500,1500,500,-90,90");

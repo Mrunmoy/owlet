@@ -1,4 +1,4 @@
-# owlet protocol v3 test vectors — consumed by tests/test_nmea_codec.cpp and tools/python/tests.
+# owlet protocol v3 test vectors — consumed by tests/test_text_codec.cpp and tools/python/tests.
 # Format: <expected-result> <frame>. Results: OK (valid frame), CHK (checksum mismatch), SYN (malformed).
 # Frames are listed without the trailing CRLF.
 OK  $PING*10

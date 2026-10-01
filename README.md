@@ -52,7 +52,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 ## Features
 
 - **Plug in and go.** The ESP32-S3's built-in USB shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
-- **Human-readable, checksummed protocol.** NMEA-style lines like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
+- **Human-readable, checksummed protocol.** One line per message, like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
 - **Know where it is, and when.** Poll the position with `$POS` or stream it at up to 50 Hz. Every report is timestamped with the device clock, and the client maps those timestamps onto your PC's clock, so you can ask "where was the camera pointing when this frame was taken?"
 - **Self-describing.** The head reports its capabilities (`$CAPS`) and its calibration (`$CAL`), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
 - **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
@@ -67,12 +67,18 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 
 ## How it works
 
-```
-┌──────────────┐   USB (CDC serial)    ┌────────────────┐   I²C   ┌──────────┐   PWM   ┌───────────┐
-│  PC / Pi /   │ ───────────────────▶ │  ESP32-S3 Zero │ ──────▶ │ PCA9685  │ ──────▶ │ pan servo │
-│  anything    │ ◀─────────────────── │  owlet firmware│         │ 16-ch PWM│ ──────▶ │ tilt servo│
-└──────────────┘  $MOVE,30,-15*3B      └────────────────┘         └──────────┘         └───────────┘
-                  $ACK,MOVE*74
+```mermaid
+flowchart LR
+    PC["PC / Raspberry Pi<br/>owlet CLI · Python · any language"]
+    ESP["ESP32-S3 Zero<br/>owlet firmware"]
+    PCA["PCA9685<br/>16-channel PWM"]
+    PAN(["Pan servo<br/>base rotate"])
+    TILT(["Tilt servo"])
+
+    PC <-->|"USB serial · $MOVE,30,-15*3B ⇄ $ACK,MOVE*74"| ESP
+    ESP -->|"I²C · GP1 / GP2"| PCA
+    PCA -->|"PWM channel 0"| PAN
+    PCA -->|"PWM channel 1"| TILT
 ```
 
 The firmware runs a 100 Hz loop. Each pass it advances both servos (position slew or velocity mode, plus the watchdog), lets the protocol emit time-driven messages (arrival, streamed position, timeouts), then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The ESP32-specific code only connects it to the real USB port, clock and I²C bus.
@@ -80,6 +86,17 @@ The firmware runs a 100 Hz loop. Each pass it advances both servos (position sle
 ## Object tracking
 
 owlet is designed to be the motion half of a camera tracker: the PC runs the detector, and owlet turns the camera.
+
+```mermaid
+flowchart LR
+    CAM["Webcam frame<br/>+ capture time"] --> DET["Detector<br/>e.g. YOLO"]
+    DET -->|"target pixel"| CTL["PixelController<br/>pixel → angle → rate"]
+    TR["Tracker<br/>pose history · clock sync"] -->|"pose at capture, pose now"| CTL
+    CTL -->|"pan / tilt °/s"| TR
+    TR -->|"$VEL · no waiting for ACK"| HEAD["owlet head"]
+    HEAD -->|"$POS · 50 Hz, timestamped"| TR
+    HEAD -.->|"no $VEL for 300 ms → stop, $TIMEOUT"| HEAD
+```
 
 ```python
 import time
@@ -133,19 +150,35 @@ python tools/python/examples/track_object.py --target person --fov-h 70 --fov-v 
 
 ### Wiring
 
-```
-ESP32-S3 Zero          PCA9685
-─────────────          ───────
-GND            ─────── GND
-3V3            ─────── VCC        (logic supply)
-5V             ─────── V+         (servo supply; or a separate 5 V source with common GND)
-GP1            ─────── SDA
-GP2            ─────── SCL
-
-PCA9685 channel 0  →  pan servo  (base rotate)
-PCA9685 channel 1  →  tilt servo
-
-GP43 (UART0 TX) ────→ optional USB-TTL adapter RX, 115200 baud, for debug logs
+```mermaid
+flowchart LR
+    subgraph ESP["ESP32-S3 Zero"]
+        direction TB
+        E_GND["GND"]
+        E_33["3V3"]
+        E_5["5V"]
+        E_1["GP1"]
+        E_2["GP2"]
+        E_43["GP43 · UART0 TX"]
+    end
+    subgraph PCA["PCA9685"]
+        direction TB
+        P_GND["GND"]
+        P_VCC["VCC · logic supply"]
+        P_VP["V+ · servo supply"]
+        P_SDA["SDA"]
+        P_SCL["SCL"]
+        P_C0["Channel 0"]
+        P_C1["Channel 1"]
+    end
+    E_GND --- P_GND
+    E_33 --- P_VCC
+    E_5 --- P_VP
+    E_1 --- P_SDA
+    E_2 --- P_SCL
+    P_C0 --> PAN(["Pan servo · base rotate"])
+    P_C1 --> TILT(["Tilt servo"])
+    E_43 -.->|"optional · 115200 baud debug logs"| TTL["USB-TTL adapter RX"]
 ```
 
 > **Power note:** two small servos can run off the ESP's USB 5 V for bench testing. Under load, or if the board resets when the servos move (a brown-out), power `V+` from a separate 5 V supply and keep the grounds connected.
@@ -165,9 +198,11 @@ nix develop                 # first run downloads the toolchain; later runs are 
 
 With more than one Espressif board connected, pass the port: `./build.py --esp --flash /dev/ttyACM1`.
 
-### 2. Install the PC client
+### 2. The PC client
 
-Any machine with Python 3.9+ (Linux, macOS or Windows):
+**In `nix develop`: nothing to install.** The shell already puts the `owlet` command on your `PATH` (it runs the checkout's `tools/bin/owlet`). Don't `pip install` inside the Nix shell: its Python lives in the read-only Nix store, so pip fails with *Permission denied*.
+
+**Not using Nix?** Any machine with Python 3.9+ (Linux, macOS or Windows):
 
 ```bash
 pip install ./tools/python
@@ -268,19 +303,25 @@ uint8_t cs = 0; for (const char* p = body; *p; ++p) cs ^= (uint8_t)*p;
 const cs = [...body].reduce((a, c) => a ^ c.charCodeAt(0), 0);
 ```
 
-An example session (`→` is sent to owlet, `←` comes back):
+An example session:
 
-```
-→ $ENABLE*01
-← $ACK,ENABLE*64
-→ $MOVE,30,-15*3B
-← $ACK,MOVE*74
-← $ARRIVED,30.0,-15.0*75            (sent when the move completes)
-→ $POS*4C
-← $POS,30.0,-15.0,30.0,-15.0,H,48211*3A
-→ $VEL,-12.5,30*69                  (velocity mode; repeat within the watchdog period)
-← $ACK,VEL*3A
-← $TIMEOUT,VEL*28                   (if you stop sending VEL)
+```mermaid
+sequenceDiagram
+    participant PC
+    participant H as owlet
+    PC->>H: $ENABLE*01
+    H-->>PC: $ACK,ENABLE*64
+    PC->>H: $MOVE,30,-15*3B
+    H-->>PC: $ACK,MOVE*74
+    Note over H: slews at the set speed
+    H-->>PC: $ARRIVED,30.0,-15.0*75
+    PC->>H: $POS*4C
+    H-->>PC: $POS,30.0,-15.0,30.0,-15.0,H,48211*3A
+    PC->>H: $VEL,-12.5,30*69
+    Note right of PC: velocity mode: repeat within the watchdog period
+    H-->>PC: $ACK,VEL*3A
+    Note over PC,H: the PC stops sending VEL
+    H-->>PC: $TIMEOUT,VEL*28
 ```
 
 Serial settings don't matter on native USB (any baud rate works). Open the port normally and **don't toggle DTR/RTS**, because that's the chip's auto-reset signal.
@@ -363,6 +404,21 @@ Every valid request gets exactly one reply, in order. The full specification, in
 
 The firmware is organised around small interfaces, so you can extend it by **adding** classes rather than editing existing ones:
 
+```mermaid
+flowchart TB
+    LOOP["ControlLoop<br/>100 Hz scheduler"]
+    SRC[/"IByteSource · USB, UART, TCP…"/] --> LOOP
+    LOOP --> PROTO{{"IProtocol"}}
+    PROTO --- TEXT["TextProtocol<br/>built in"]
+    PROTO --- MINE["Your protocol<br/>Pelco-D, G-code, binary…"]
+    PROTO --- MUX["ProtocolMux<br/>several on one port"]
+    TEXT & MINE --> HEAD{{"IPanTilt"}}
+    TEXT & MINE --> SINK[/"IByteSink · replies"/]
+    HEAD --- PT["PanTilt<br/>or your own mechanism"]
+    PT --> SERVO["Servo"] --> CH{{"IServoChannel"}}
+    CH --- PCA["PCA9685 channel<br/>or ESP32 LEDC, …"]
+```
+
 | Interface | Implement it to… |
 |-----------|-------------------|
 | `owlet::core::IProtocol` | add a wire protocol (Pelco-D for PTZ software, G-code, a compact binary format, …) |
@@ -386,7 +442,7 @@ public:
 Then, in `apps/esp32-owlet/main/main.cpp`, run it next to the built-in protocol on the same USB port:
 
 ```cpp
-static owlet::nmea::NmeaProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
+static owlet::text::TextProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
 static MyProtocol                   mine(usb, head);
 static owlet::core::ProtocolMux<2>  protocols({&native, &mine});
 static owlet::core::ControlLoop     loop(usb, head, protocols);
@@ -401,7 +457,7 @@ git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
 ```
 
 - **Python (PC side):** `pip install -e third_party/owlet/tools/python`, then `from owlet import Owlet, Tracker, PixelController`.
-- **Host C++ (tests, simulators):** `add_subdirectory(third_party/owlet)` and link `owlet::core`, `owlet::nmea`, `owlet::servo`, `owlet::pca9685` or `owlet::hal`. owlet's own tests and tools are built only when it's the top-level project.
+- **Host C++ (tests, simulators):** `add_subdirectory(third_party/owlet)` and link `owlet::core`, `owlet::text`, `owlet::servo`, `owlet::pca9685` or `owlet::hal`. owlet's own tests and tools are built only when it's the top-level project.
 - **ESP-IDF firmware:** in your project's `CMakeLists.txt`:
 
   ```cmake
@@ -409,7 +465,7 @@ git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
   list(APPEND EXTRA_COMPONENT_DIRS ${OWLET_IDF_COMPONENT_DIRS})
   ```
 
-  then `REQUIRES owlet_core owlet_nmea owlet_pca9685 owlet_esp32` in your `main` component, and wire things up as `apps/esp32-owlet/main/main.cpp` does.
+  then `REQUIRES owlet_core owlet_text owlet_pca9685 owlet_esp32` in your `main` component, and wire things up as `apps/esp32-owlet/main/main.cpp` does.
 
   **Copy the console settings too.** The USB port must carry only protocol traffic, so add these to your project's `sdkconfig.defaults` (see `apps/esp32-owlet/sdkconfig.defaults`). Without them, ESP-IDF log lines are mixed into protocol frames.
 
@@ -474,7 +530,7 @@ Everything below runs inside `nix develop`.
 Run one test suite or test:
 
 ```bash
-ctest --test-dir build/host -R NmeaProtocol --output-on-failure
+ctest --test-dir build/host -R TextProtocol --output-on-failure
 build/host/tests/owlet_servo_test --gtest_filter='Servo.Slew*'
 cd tools/python && python -m unittest tests.test_protocol
 ```
@@ -489,26 +545,21 @@ The USB port carries **only** protocol traffic. Firmware logs go to UART0: conne
 
 ## Project layout
 
-```
-owlet/
-├── apps/
-│   ├── esp32-owlet/        ESP-IDF firmware project (entry point and Kconfig)
-│   └── host-sim/           owlet_sim: the firmware core on a Linux pseudo-terminal
-├── drivers/
-│   ├── owlet_hal/          hardware interfaces (I²C, delay, servo channel, serial port)
-│   ├── owlet_pca9685/      PCA9685 PWM driver
-│   └── owlet_servo/        servo model: angle↔pulse, speed-limited motion
-├── firmware/common/
-│   ├── owlet_core/         interfaces (IPanTilt, IProtocol), PanTilt, ControlLoop, ProtocolMux
-│   └── owlet_nmea/         the native protocol: codec + NmeaProtocol
-├── platform/owlet_esp32/   ESP-IDF implementations of the hardware interfaces
-├── simulators/             virtual I²C bus + register-level PCA9685 model
-├── tests/                  GoogleTest suites
-├── tools/python/           pip-installable client library and `owlet` CLI
-├── docs/                   design, protocol, calibration, dev journal
-├── build.py                build/test/flash entry point
-└── flake.nix               reproducible toolchain
-```
+| Path | What's there |
+|------|--------------|
+| `apps/esp32-owlet/` | ESP-IDF firmware project: entry point and Kconfig |
+| `apps/host-sim/` | `owlet_sim`: the firmware core on a Linux pseudo-terminal |
+| `drivers/owlet_hal/` | Hardware interfaces: I²C, delay, servo channel, serial port, clock |
+| `drivers/owlet_pca9685/` | PCA9685 PWM driver |
+| `drivers/owlet_servo/` | Servo model: angle ↔ pulse, speed-limited motion |
+| `firmware/common/owlet_core/` | Interfaces (`IPanTilt`, `IProtocol`, `ICalibration`), `PanTilt`, `ControlLoop`, `ProtocolMux`, `Calibrator` |
+| `firmware/common/owlet_text/` | The native text protocol: codec + `TextProtocol` |
+| `platform/owlet_esp32/` | ESP-IDF implementations of the hardware interfaces, NVS calibration store |
+| `simulators/` | Virtual I²C bus + register-level PCA9685 model |
+| `tests/` | GoogleTest suites |
+| `tools/python/` | Client library and `owlet` CLI (`tools/bin/owlet` runs it in `nix develop`) |
+| `docs/` | Design, calibration, dev journal, protocol test vectors |
+| `build.py` · `flake.nix` | Build/test/flash entry point · reproducible toolchain |
 
 Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers and no dynamic memory, and it builds and runs on a PC. Only `platform/` and `apps/esp32-owlet/` touch ESP-IDF. Read [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and the reasoning behind it.
 
@@ -551,7 +602,7 @@ Issues and pull requests are welcome. Before opening a PR:
 
 1. Run `./build.py --host -t`; every test must pass.
 2. Add or update tests for any behaviour you change. All device behaviour lives in `firmware/common/` so it can be tested on a PC.
-3. If you change the native protocol, update the firmware (`owlet_nmea`), the Python client, and `docs/DESIGN.md` §5 together.
+3. If you change the native protocol, update the firmware (`owlet_text`), the Python client, and `docs/DESIGN.md` §5 together.
 4. Keep firmware code free of dynamic allocation, exceptions and RTTI, following the existing style (C++17, Allman braces, `m_` member prefix).
 
 ## License
@@ -562,4 +613,3 @@ owlet is released under the [MIT License](LICENSE).
 
 - owlet grew out of **clops**, a one-eyed robot built on the same ESP32-S3 + PCA9685 stack. Its HAL, PCA9685 driver and simulator were carried over.
 - Toolchain packaging by [nixpkgs-esp-dev](https://github.com/mirrexagon/nixpkgs-esp-dev).
-- Framing inspired by NMEA 0183.

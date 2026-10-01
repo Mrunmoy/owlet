@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Options ──────────────────────────────────────────────────────────────────
 # Tests and host tools only by default when owlet is the top-level project, so
 # a parent that add_subdirectory()s owlet (e.g. as a git submodule) just gets
-# the libraries: owlet::hal, ::pca9685, ::servo, ::core, ::nmea.
+# the libraries: owlet::hal, ::pca9685, ::servo, ::core, ::text.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(_OWLET_TOP_LEVEL ON)
 else()

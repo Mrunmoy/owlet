@@ -50,11 +50,13 @@
           ];
 
           shellHook = ''
+            # The owlet CLI, run from this checkout (no install needed).
+            export PATH="$PWD/tools/bin:$PATH"
             echo "owlet dev shell ready"
             echo "  host build:     ./build.py --host -t"
             echo "  esp build:      ./build.py --esp"
             echo "  esp flash:      ./build.py --esp --flash   (auto-detects the board)"
-            echo "  pc client:      python -m owlet --help   (from tools/)"
+            echo "  pc client:      owlet --help"
             echo ""
           '';
         };

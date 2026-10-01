@@ -16,7 +16,7 @@
 #include "owlet/hal/IClock.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/hal/ISerialPort.hpp"
-#include "owlet/nmea/NmeaProtocol.hpp"
+#include "owlet/text/TextProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
 #include "owlet/sim/PCA9685Simulator.hpp"
 #include "owlet/sim/VirtualI2CBus.hpp"
@@ -228,7 +228,7 @@ int main(int argc, char** argv)
         pan, tilt, head, store,
         ::owlet::core::CalibrationRecord{::owlet::Servo::Calibration{}, ::owlet::Servo::Calibration{}});
     calibrator.begin();
-    ::owlet::nmea::NmeaProtocol protocol(port, head, calibrator, clock,
+    ::owlet::text::TextProtocol protocol(port, head, calibrator, clock,
                                          ::owlet::core::kFirmwareVersion);
     ::owlet::core::ControlLoop  loop(port, head, protocol);
     loop.begin(clock.nowMs());

@@ -1,17 +1,17 @@
-#include "owlet/nmea/NmeaProtocol.hpp"
+#include "owlet/text/TextProtocol.hpp"
 
-#include "owlet/nmea/Sentence.hpp"
+#include "owlet/text/Sentence.hpp"
 
 #include <array>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 using ::owlet::core::ConsumeResult;
 using ::owlet::core::IPanTilt;
 using ::owlet::core::TickStatus;
 
-NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink&     out,
+TextProtocol::TextProtocol(::owlet::hal::IByteSink&     out,
                            IPanTilt&                    head,
                            ::owlet::core::ICalibration& calibration,
                            const ::owlet::hal::IClock&  clock,
@@ -26,13 +26,13 @@ NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink&     out,
 
 // ── IProtocol ───────────────────────────────────────────────────────────────
 
-bool NmeaProtocol::claims(uint8_t byte, bool /*atLineStart*/) const
+bool TextProtocol::claims(uint8_t byte, bool /*atLineStart*/) const
 {
     // '$' starts a frame anywhere, so a garbled line resyncs on the next one.
     return byte == '$';
 }
 
-ConsumeResult NmeaProtocol::consume(const uint8_t* data, std::size_t len)
+ConsumeResult TextProtocol::consume(const uint8_t* data, std::size_t len)
 {
     for (std::size_t i = 0; i < len; ++i)
     {
@@ -71,13 +71,13 @@ ConsumeResult NmeaProtocol::consume(const uint8_t* data, std::size_t len)
     return {len, false};
 }
 
-void NmeaProtocol::begin(uint32_t nowMs)
+void TextProtocol::begin(uint32_t nowMs)
 {
     m_nowMs = nowMs;
     sendVersioned("READY");
 }
 
-void NmeaProtocol::onTick(uint32_t nowMs, const TickStatus& status)
+void TextProtocol::onTick(uint32_t nowMs, const TickStatus& status)
 {
     m_nowMs = nowMs;
 
@@ -118,7 +118,7 @@ void NmeaProtocol::onTick(uint32_t nowMs, const TickStatus& status)
 
 // ── Request handling ────────────────────────────────────────────────────────
 
-void NmeaProtocol::handleFrame(std::string_view frame)
+void TextProtocol::handleFrame(std::string_view frame)
 {
     Sentence sentence;
     switch (decodeSentence(frame, sentence))
@@ -148,7 +148,7 @@ void NmeaProtocol::handleFrame(std::string_view frame)
     }
 }
 
-void NmeaProtocol::execute(const Request& req)
+void TextProtocol::execute(const Request& req)
 {
     switch (req.command)
     {
@@ -276,7 +276,7 @@ void NmeaProtocol::execute(const Request& req)
 
 // ── Calibration (v3) ────────────────────────────────────────────────────────
 
-void NmeaProtocol::executeCal(const Request& req)
+void TextProtocol::executeCal(const Request& req)
 {
     using ::owlet::core::Axis;
     using CalResult = ::owlet::core::ICalibration::Result;
@@ -333,7 +333,7 @@ void NmeaProtocol::executeCal(const Request& req)
     }
 }
 
-void NmeaProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
+void TextProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
 {
     using Source = ::owlet::core::ICalibration::Source;
     static constexpr std::array<std::string_view, 3> kSourceCodes{"F", "S", "M"};
@@ -357,7 +357,7 @@ void NmeaProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
 
 // ── Replies ─────────────────────────────────────────────────────────────────
 
-void NmeaProtocol::sendResult(Command cmd, Result result)
+void TextProtocol::sendResult(Command cmd, Result result)
 {
     switch (result)
     {
@@ -382,7 +382,7 @@ void NmeaProtocol::sendResult(Command cmd, Result result)
     }
 }
 
-void NmeaProtocol::sendPos()
+void TextProtocol::sendPos()
 {
     static constexpr std::array<std::string_view, 3> kStateCodes{"D", "M", "H"};
     const IPanTilt::Pose p = m_head.position();
@@ -397,14 +397,14 @@ void NmeaProtocol::sendPos()
     flush();
 }
 
-void NmeaProtocol::sendAck(Command cmd)
+void TextProtocol::sendAck(Command cmd)
 {
     m_writer.begin("ACK");
     m_writer.field(commandName(cmd));
     flush();
 }
 
-void NmeaProtocol::sendNak(Command cmd, std::string_view code)
+void TextProtocol::sendNak(Command cmd, std::string_view code)
 {
     m_writer.begin("NAK");
     m_writer.field(commandName(cmd));
@@ -412,14 +412,14 @@ void NmeaProtocol::sendNak(Command cmd, std::string_view code)
     flush();
 }
 
-void NmeaProtocol::sendErr(std::string_view code)
+void TextProtocol::sendErr(std::string_view code)
 {
     m_writer.begin("ERR");
     m_writer.field(code);
     flush();
 }
 
-void NmeaProtocol::sendVersioned(std::string_view name)
+void TextProtocol::sendVersioned(std::string_view name)
 {
     m_writer.begin(name);
     m_writer.uint(kProtocolVersion);
@@ -427,7 +427,7 @@ void NmeaProtocol::sendVersioned(std::string_view name)
     flush();
 }
 
-void NmeaProtocol::flush()
+void TextProtocol::flush()
 {
     const std::string_view line = m_writer.finish();
     // A refused write means no host is listening; dropping the line is the
@@ -435,4 +435,4 @@ void NmeaProtocol::flush()
     (void) m_out.write(line.data(), line.size());
 }
 
-} // namespace owlet::nmea
+} // namespace owlet::text

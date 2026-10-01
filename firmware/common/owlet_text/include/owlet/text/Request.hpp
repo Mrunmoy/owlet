@@ -1,13 +1,13 @@
 #pragma once
 
-#include "owlet/nmea/Sentence.hpp"
+#include "owlet/text/Sentence.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 enum class Command : uint8_t
@@ -62,4 +62,4 @@ std::string_view commandName(Command command);
 // Strict unsigned integer: D{1,5}.
 [[nodiscard]] bool parseUnsigned(std::string_view text, uint32_t& out);
 
-} // namespace owlet::nmea
+} // namespace owlet::text

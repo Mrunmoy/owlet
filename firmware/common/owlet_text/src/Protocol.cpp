@@ -1,14 +1,14 @@
-#include "owlet/nmea/Checksum.hpp"
-#include "owlet/nmea/LineFramer.hpp"
-#include "owlet/nmea/LineWriter.hpp"
-#include "owlet/nmea/Request.hpp"
-#include "owlet/nmea/Sentence.hpp"
+#include "owlet/text/Checksum.hpp"
+#include "owlet/text/LineFramer.hpp"
+#include "owlet/text/LineWriter.hpp"
+#include "owlet/text/Request.hpp"
+#include "owlet/text/Sentence.hpp"
 
 #include <array>
 #include <cmath>
 #include <cstdint>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 namespace
@@ -385,4 +385,4 @@ std::string_view LineWriter::finish()
     return std::string_view(m_buf.data(), m_len);
 }
 
-} // namespace owlet::nmea
+} // namespace owlet::text

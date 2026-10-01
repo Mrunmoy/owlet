@@ -5,34 +5,34 @@
 #include "owlet/core/IProtocol.hpp"
 #include "owlet/hal/IByteSink.hpp"
 #include "owlet/hal/IClock.hpp"
-#include "owlet/nmea/LineFramer.hpp"
-#include "owlet/nmea/LineWriter.hpp"
-#include "owlet/nmea/Request.hpp"
+#include "owlet/text/LineFramer.hpp"
+#include "owlet/text/LineWriter.hpp"
+#include "owlet/text/Request.hpp"
 
 #include <cstdint>
 #include <string_view>
 
-namespace owlet::nmea
+namespace owlet::text
 {
 
 // owlet's native "$BODY*HH" protocol (docs/DESIGN.md §5) as an IProtocol.
 // Depends only on IPanTilt, IByteSink and IClock, so it runs on any head and
 // any transport.
-class NmeaProtocol final : public ::owlet::core::IProtocol
+class TextProtocol final : public ::owlet::core::IProtocol
 {
 public:
     static constexpr uint32_t kMaxStreamHz = 50;
 
     // `clock` stamps $CLOCK replies; $POS is stamped with the tick time of
     // the pose it reports.
-    NmeaProtocol(::owlet::hal::IByteSink&      out,
+    TextProtocol(::owlet::hal::IByteSink&      out,
                  ::owlet::core::IPanTilt&      head,
                  ::owlet::core::ICalibration&  calibration,
                  const ::owlet::hal::IClock&   clock,
                  std::string_view              firmwareVersion);
 
-    NmeaProtocol(const NmeaProtocol&)            = delete;
-    NmeaProtocol& operator=(const NmeaProtocol&) = delete;
+    TextProtocol(const TextProtocol&)            = delete;
+    TextProtocol& operator=(const TextProtocol&) = delete;
 
     // ── IProtocol ───────────────────────────────────────────────────────────
 
@@ -73,4 +73,4 @@ private:
     bool     m_busFault{false};
 };
 
-} // namespace owlet::nmea
+} // namespace owlet::text

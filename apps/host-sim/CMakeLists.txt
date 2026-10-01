@@ -7,7 +7,7 @@ endif()
 
 add_executable(owlet_sim main.cpp)
 target_link_libraries(owlet_sim PRIVATE
-    owlet::nmea
+    owlet::text
     owlet::pca9685
     owlet_simulators
 )

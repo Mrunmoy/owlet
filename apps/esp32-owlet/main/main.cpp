@@ -9,13 +9,13 @@
 #include "owlet/core/Version.hpp"
 #include "owlet/nmea/NmeaProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
+#include "owlet/platform/esp32/Esp32Clock.hpp"
 #include "owlet/platform/esp32/Esp32Delay.hpp"
 #include "owlet/platform/esp32/Esp32I2CBus.hpp"
 #include "owlet/platform/esp32/Esp32UsbSerial.hpp"
 #include "owlet/servo/Servo.hpp"
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -27,6 +27,7 @@ namespace
 
 using ::owlet::PCA9685;
 using ::owlet::Servo;
+using ::owlet::platform::esp32::Esp32Clock;
 using ::owlet::platform::esp32::Esp32Delay;
 using ::owlet::platform::esp32::Esp32I2CBus;
 using ::owlet::platform::esp32::Esp32UsbSerial;
@@ -54,11 +55,6 @@ constexpr Servo::Calibration kTiltCal = makeCalibration(
     CONFIG_OWLET_TILT_PULSE_MIN_US, CONFIG_OWLET_TILT_PULSE_CENTER_US,
     CONFIG_OWLET_TILT_PULSE_MAX_US, CONFIG_OWLET_TILT_LIMIT_MIN_DEG,
     CONFIG_OWLET_TILT_LIMIT_MAX_DEG);
-
-uint32_t millis()
-{
-    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
-}
 
 } // namespace
 
@@ -105,14 +101,15 @@ extern "C" void app_main(void)
     static ::owlet::core::PanTilt head(pan, tilt);
     // Protocols are plug-ins: to add your own, construct it here and combine
     // them with core::ProtocolMux (docs/DESIGN.md §4.4).
-    static ::owlet::nmea::NmeaProtocol protocol(usb, head, ::owlet::core::kFirmwareVersion);
+    static Esp32Clock                  clock;
+    static ::owlet::nmea::NmeaProtocol protocol(usb, head, clock, ::owlet::core::kFirmwareVersion);
     static ::owlet::core::ControlLoop  loop(usb, head, protocol);
 
-    loop.begin(millis());
+    loop.begin(clock.nowMs());
     TickType_t wake = xTaskGetTickCount();
     for (;;)
     {
-        loop.service(millis());
+        loop.service(clock.nowMs());
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(kLoopPeriodMs));
     }
 }

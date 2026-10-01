@@ -63,6 +63,20 @@ public:
     // Slew speed for position moves, deg/s.
     [[nodiscard]] virtual Result setSpeed(float degPerSec) = 0;
 
+    // ── Velocity mode ───────────────────────────────────────────────────────
+
+    // Turn at signed rates (deg/s) until told otherwise; stops at soft limits.
+    // Any position command ends it. Each call re-arms the watchdog.
+    [[nodiscard]] virtual Result setVelocity(float panDegPerSec, float tiltDegPerSec) = 0;
+    // Velocity mode stops itself if not refreshed within this period.
+    // 0 disables the watchdog; otherwise kMinWatchdogMs..kMaxWatchdogMs.
+    [[nodiscard]] virtual Result setWatchdog(uint32_t ms) = 0;
+    [[nodiscard]] virtual uint32_t watchdogMs() const = 0;
+
+    static constexpr uint32_t kDefaultWatchdogMs = 500;
+    static constexpr uint32_t kMinWatchdogMs     = 50;
+    static constexpr uint32_t kMaxWatchdogMs     = 5000;
+
     // ── Introspection ───────────────────────────────────────────────────────
 
     [[nodiscard]] virtual State state() const = 0;

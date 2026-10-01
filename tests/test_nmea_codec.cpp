@@ -297,11 +297,52 @@ TEST(Request, UnknownCommand)
     EXPECT_EQ(r.status, RequestStatus::Unknown);
 }
 
+TEST(Request, VelocityCarriesTwoSignedRates)
+{
+    const std::string f = encode("VEL,-12.5,30");
+    const Request     r = parse(std::string_view(f).substr(0, f.size() - 2));
+    EXPECT_EQ(r.status, RequestStatus::Ok);
+    EXPECT_EQ(r.command, Command::Vel);
+    EXPECT_EQ(r.argCount, 2u);
+    EXPECT_FLOAT_EQ(r.a, -12.5f);
+    EXPECT_FLOAT_EQ(r.b, 30.0f);
+}
+
+TEST(Request, WatchdogQueryOrIntegerSet)
+{
+    for (const char* body : {"WATCHDOG", "WATCHDOG,250"})
+    {
+        const std::string f = encode(body);
+        const Request     r = parse(std::string_view(f).substr(0, f.size() - 2));
+        EXPECT_EQ(r.status, RequestStatus::Ok) << body;
+        EXPECT_EQ(r.command, Command::Watchdog);
+    }
+    for (const char* body : {"WATCHDOG,2.5", "WATCHDOG,-1", "WATCHDOG,1,2"})
+    {
+        const std::string f = encode(body);
+        EXPECT_EQ(parse(std::string_view(f).substr(0, f.size() - 2)).status,
+                  RequestStatus::BadFormat)
+            << body;
+    }
+}
+
+TEST(Request, ClockTakesNoArguments)
+{
+    const std::string ok = encode("CLOCK");
+    EXPECT_EQ(parse(std::string_view(ok).substr(0, ok.size() - 2)).command, Command::Clock);
+    const std::string bad = encode("CLOCK,1");
+    EXPECT_EQ(parse(std::string_view(bad).substr(0, bad.size() - 2)).status,
+              RequestStatus::BadFormat);
+}
+
 TEST(Request, CommandNamesRoundTrip)
 {
     EXPECT_EQ(commandName(Command::Move), "MOVE");
     EXPECT_EQ(commandName(Command::Stream), "STREAM");
     EXPECT_EQ(commandName(Command::Limits), "LIMITS");
+    EXPECT_EQ(commandName(Command::Vel), "VEL");
+    EXPECT_EQ(commandName(Command::Watchdog), "WATCHDOG");
+    EXPECT_EQ(commandName(Command::Clock), "CLOCK");
 }
 
 // ── LineWriter ──────────────────────────────────────────────────────────────
@@ -354,6 +395,15 @@ TEST(LineWriter, OutputDecodesBack)
     Sentence               s;
     EXPECT_EQ(decodeSentence(line.substr(0, line.size() - 2), s), FrameStatus::Ok);
     EXPECT_EQ(line, "$ARRIVED,30.0,-15.0*75\r\n");
+}
+
+TEST(LineWriter, FormatsFullUint32Range)
+{
+    LineWriter w;
+    w.begin("CLOCK");
+    w.uint(4294967295u);
+    const std::string_view line = w.finish();
+    EXPECT_EQ(line.substr(0, line.find('*')), "$CLOCK,4294967295");
 }
 
 TEST(LineWriter, OverlongLineIsTruncatedSafely)

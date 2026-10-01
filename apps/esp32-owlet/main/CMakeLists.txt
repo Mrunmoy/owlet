@@ -6,6 +6,4 @@ idf_component_register(
         owlet_nmea
         owlet_pca9685
         owlet_esp32
-    PRIV_REQUIRES
-        esp_timer
 )

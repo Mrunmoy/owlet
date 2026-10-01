@@ -14,6 +14,7 @@ if(ESP_PLATFORM)
 else()
     add_library(owlet_servo STATIC ${OWLET_SERVO_SRCS})
     add_library(owlet::servo ALIAS owlet_servo)
+    target_compile_features(owlet_servo PUBLIC cxx_std_17)
     target_include_directories(owlet_servo PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )

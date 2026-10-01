@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import deque
 from typing import Callable, Iterator
@@ -21,8 +22,13 @@ from .protocol import (
 
 ESPRESSIF_VID = 0x303A
 
-# Lines the device sends on its own, never as the reply to a request.
-_EVENTS = {"READY", "ARRIVED"}
+# Sentences that are replies to a request (POS is excluded: it is also streamed).
+REPLY_NAMES = frozenset({"ACK", "NAK", "ERR", "PONG", "CLOCK", "SPEED", "WATCHDOG", "LIMITS"})
+
+
+def is_reply(s: Sentence) -> bool:
+    """True if `s` answers some request ($ERR,BUS is unsolicited)."""
+    return s.name in REPLY_NAMES and not (s.name == "ERR" and s.fields[:1] == ("BUS",))
 
 
 class OwletError(Exception):
@@ -48,8 +54,14 @@ class Owlet:
     """
 
     def __init__(self, port: str | None = None, timeout: float = 1.0,
-                 connect: bool = True):
-        if port is None:
+                 connect: bool = True, transport=None):
+        """``transport`` replaces the serial port with any object offering
+        pyserial's ``read``/``write``/``reset_input_buffer``/``close``
+        (a socket bridge, a test fake, …)."""
+        if transport is not None:
+            self.port = port or "<transport>"
+            self._serial = transport
+        elif port is None:
             ports = find_ports()
             if len(ports) != 1:
                 raise OwletError(
@@ -57,9 +69,15 @@ class Owlet:
                     f"(found {ports or 'none'}); pass port=..."
                 )
             port = ports[0]
-        self.port = port
+        if transport is None:
+            self.port = port
+            self._serial = serial.Serial(port, 115200, timeout=0.05)
         self.timeout = timeout
-        self._serial = serial.Serial(port, 115200, timeout=0.05)
+        # Requests sent with send() whose replies haven't been seen yet. A
+        # frame-level $ERR can only be blamed on the current request when
+        # nothing else is outstanding.
+        self._outstanding = 0
+        self._outstanding_lock = threading.Lock()
         self._rx = b""
         self._pending: deque[Sentence] = deque()
         self.on_event: Callable[[Sentence], None] | None = None
@@ -145,6 +163,26 @@ class Owlet:
     def stream(self, hz: int) -> None:
         self._ack("STREAM", int(hz))
 
+    def velocity(self, pan_deg_s: float, tilt_deg_s: float) -> None:
+        """Velocity mode: turn at signed rates until told otherwise.
+
+        The device stops by itself unless this is refreshed within the
+        watchdog period (see ``watchdog``). For a high-rate control loop use
+        ``owlet.tracking.Tracker.set_rates``, which doesn't wait for each ACK.
+        """
+        self._ack("VEL", pan_deg_s, tilt_deg_s)
+
+    def watchdog(self, ms: int | None = None) -> int:
+        """Get or set the velocity watchdog (0 = off, else 50–5000 ms)."""
+        if ms is None:
+            return int(self.request("WATCHDOG", expect="WATCHDOG").fields[0])
+        self._ack("WATCHDOG", int(ms))
+        return int(ms)
+
+    def clock(self) -> int:
+        """Device uptime in ms (wraps at 2**32)."""
+        return int(self.request("CLOCK", expect="CLOCK").fields[0])
+
     def watch(self, hz: int = 10) -> Iterator[Position]:
         """Yield streamed positions until the caller stops iterating."""
         self.stream(hz)
@@ -174,24 +212,70 @@ class Owlet:
     # ── low level ─────────────────────────────────────────────────────────
 
     def send(self, name: str, *fields: object) -> None:
-        self._serial.write(encode(name, *fields))
+        """Send a request without waiting for its reply (fire-and-forget)."""
+        with self._outstanding_lock:
+            self._serial.write(encode(name, *fields))
+            self._outstanding += 1
 
-    def request(self, name: str, *fields: object, expect: str = "ACK") -> Sentence:
-        """Send a request and return its reply, raising on NAK/ERR."""
-        self.send(name, *fields)
+    def await_reply(self, name: str) -> Sentence:
+        """Wait for the ACK/NAK of an earlier ``send(name, …)``, matched by
+        name, and settle the books: replies arrive in order, so everything
+        sent before it has now been answered (or was lost)."""
         deadline = time.monotonic() + self.timeout
         while True:
             s = self._next_sentence(deadline)
             if s is None:
                 raise OwletError(f"no reply to {name}")
-            if s.name == "NAK":
+            if s.name in ("ACK", "NAK") and s.fields[:1] == (name,):
+                with self._outstanding_lock:
+                    self._outstanding = 0
+                if s.name == "NAK":
+                    code = s.fields[1] if len(s.fields) > 1 else None
+                    raise OwletError(f"{name} refused: {code}", code)
+                return s
+            self._dispatch_event(s)
+
+    def take_outstanding(self) -> bool:
+        """Account one reply to an earlier ``send()``. Returns False if none
+        was outstanding. Used by readers that consume replies themselves."""
+        with self._outstanding_lock:
+            if self._outstanding > 0:
+                self._outstanding -= 1
+                return True
+            return False
+
+    def read_sentence(self, timeout: float) -> Sentence | None:
+        """Next valid sentence from the device, or None after ``timeout`` s."""
+        return self._next_sentence(time.monotonic() + timeout)
+
+    def request(self, name: str, *fields: object, expect: str = "ACK") -> Sentence:
+        """Send a request and return its reply, raising on NAK/ERR.
+
+        Replies arrive in request order. So while earlier ``send()``s are
+        unanswered, the next reply-type line belongs to the oldest of them,
+        whatever its name, and goes to ``on_event``. Only after that is a
+        reply matched to this request. Unsolicited lines (POS stream,
+        ARRIVED, TIMEOUT, ERR,BUS, READY) also go to ``on_event``.
+        """
+        self._serial.write(encode(name, *fields))
+        deadline = time.monotonic() + self.timeout
+        while True:
+            s = self._next_sentence(deadline)
+            if s is None:
+                with self._outstanding_lock:
+                    self._outstanding = 0  # lost replies: resynchronise the books
+                raise OwletError(f"no reply to {name}")
+            if is_reply(s) and self.take_outstanding():
+                self._dispatch_event(s)  # late reply to an earlier send()
+                continue
+            if s.name == "NAK" and s.fields[:1] == (name,):
                 code = s.fields[1] if len(s.fields) > 1 else None
                 raise OwletError(f"{name} refused: {code}", code)
-            if s.name == "ERR":
-                raise OwletError(f"{name} rejected: {s.fields[0]}", s.fields[0])
+            if s.name == "ERR" and is_reply(s):
+                err = s.fields[0] if s.fields else None
+                raise OwletError(f"{name} rejected: {err}", err)
             if s.name == expect and (expect != "ACK" or s.fields[:1] == (name,)):
                 return s
-            # Streamed POS, ARRIVED, READY, ... — not our reply.
             self._dispatch_event(s)
 
     def _ack(self, name: str, *fields: object) -> None:

@@ -65,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("value", nargs="?", type=float)
     sub.add_parser("pos", help="print current position")
     sub.add_parser("limits", help="print soft limits")
+    v = sub.add_parser("vel", help="velocity mode: turn at PAN TILT deg/s (watchdog applies)")
+    v.add_argument("pan", type=float)
+    v.add_argument("tilt", type=float)
+    wd = sub.add_parser("watchdog", help="get or set the velocity watchdog (ms, 0 = off)")
+    wd.add_argument("ms", nargs="?", type=int)
+    sub.add_parser("clock", help="print the device clock (ms since boot)")
     w = sub.add_parser("watch", help="stream positions until Ctrl-C")
     w.add_argument("--hz", type=int, default=10)
     sub.add_parser("shell", help="interactive prompt")
@@ -109,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
             elif args.cmd == "limits":
                 pmin, pmax, tmin, tmax = head.limits()
                 print(f"pan {pmin:.1f}..{pmax:.1f}   tilt {tmin:.1f}..{tmax:.1f}")
+            elif args.cmd == "vel":
+                head.velocity(args.pan, args.tilt)
+            elif args.cmd == "watchdog":
+                print(f"{head.watchdog(args.ms)} ms")
+            elif args.cmd == "clock":
+                print(f"{head.clock()} ms")
             elif args.cmd == "watch":
                 try:
                     for p in head.watch(args.hz):

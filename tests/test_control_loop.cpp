@@ -75,15 +75,35 @@ TEST(ControlLoop, TicksWithElapsedTime)
     EXPECT_EQ(proto.tickAt, (std::vector<uint32_t>{1010, 1025}));
 }
 
-TEST(ControlLoop, CapsLargeTimeGaps)
+TEST(ControlLoop, PassesRealElapsedTime)
 {
+    // The motion layer caps its own step; the loop must not hide wall time
+    // from it, or timeouts (the watchdog) would run slow when starved.
     FakeSerialPort port;
     FakeTicker     ticker;
     FakeProtocol   proto('$', true);
     ControlLoop    loop(port, ticker, proto);
     loop.begin(0);
     loop.service(5000);
-    EXPECT_EQ(ticker.dts, std::vector<uint32_t>{ControlLoop::kMaxTickMs});
+    EXPECT_EQ(ticker.dts, std::vector<uint32_t>{5000});
+}
+
+TEST(ControlLoop, BoundsInputPerServiceSoMotionKeepsRunning)  // M5
+{
+    std::vector<std::string> log;
+    FakeSerialPort           port;
+    FakeTicker               ticker;
+    LoggingProtocol          proto;
+    proto.log = &log;
+    ControlLoop loop(port, ticker, proto);
+    loop.begin(0);
+    port.rx = std::string(100 * ControlLoop::kReadChunk, 'z');
+    loop.service(10);
+    EXPECT_EQ(proto.received.size(), ControlLoop::kMaxChunksPerService * ControlLoop::kReadChunk);
+    loop.service(20);
+    EXPECT_EQ(proto.received.size(),
+              2 * ControlLoop::kMaxChunksPerService * ControlLoop::kReadChunk);
+    EXPECT_EQ(ticker.dts.size(), 2u);
 }
 
 TEST(ControlLoop, SurvivesMillisWraparound)

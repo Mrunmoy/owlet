@@ -29,7 +29,17 @@ public:
 
     [[nodiscard]] Event push(uint8_t byte);
 
+    // Abandon any partial frame (the stream was handed to another protocol).
+    void reset()
+    {
+        m_len   = 0;
+        m_state = State::Idle;
+    }
+
     std::string_view frame() const { return std::string_view(m_buf.data(), m_len); }
+
+    // True while a frame is being collected ('$' seen, no CR/LF yet).
+    [[nodiscard]] bool inFrame() const { return m_state == State::InFrame; }
 
 private:
     enum class State : uint8_t

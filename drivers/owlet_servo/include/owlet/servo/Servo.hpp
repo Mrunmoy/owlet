@@ -14,7 +14,11 @@ namespace owlet
 // center is off-midpoint is still exact at 0°. Setting minPulseUs above
 // maxPulseUs reverses the axis.
 //
-// Motion is a constant-velocity slew in deg/s driven by tick(dtMs). The
+// Two motion modes, both driven by tick(dtMs):
+//   - position: slew toward a target at speed() deg/s;
+//   - velocity: turn at a signed rate until told otherwise, stopping at the
+//     soft limits. Any position command leaves velocity mode.
+// The
 // servo starts *released* (no pulse): the first pulse after power-up makes a
 // hobby servo snap at full speed, so engaging is always an explicit act.
 class Servo
@@ -52,11 +56,16 @@ public:
 
     // ── Motion ──────────────────────────────────────────────────────────────
 
-    // Store a slew target (clamped to soft limits). No bus traffic.
+    // Store a slew target (clamped to soft limits). Leaves velocity mode.
+    // No bus traffic.
     void setTarget(float deg);
 
-    // Freeze: target := current position.
-    void stop() { m_targetDeg = m_positionDeg; }
+    // Freeze: target := current position. Leaves velocity mode.
+    void stop();
+
+    // Velocity mode at a signed rate (clamped to ±kMaxSpeedDegPerSec).
+    // Zero is the same as stop(). Independent of speed(). No bus traffic.
+    void setVelocity(float degPerSec);
 
     // Clamped to [kMinSpeedDegPerSec, kMaxSpeedDegPerSec].
     void setSpeed(float degPerSec);
@@ -69,7 +78,9 @@ public:
     // ── Introspection ───────────────────────────────────────────────────────
 
     [[nodiscard]] bool engaged() const { return m_engaged; }
-    [[nodiscard]] bool moving() const { return m_engaged && m_positionDeg != m_targetDeg; }
+    [[nodiscard]] bool moving() const;
+    [[nodiscard]] bool inVelocityMode() const { return m_velocityMode; }
+    float velocity() const { return m_velocity; }
     float positionDeg() const { return m_positionDeg; }
     float targetDeg() const { return m_targetDeg; }
     float speed() const { return m_speedDegPerSec; }
@@ -85,8 +96,10 @@ private:
     float                        m_positionDeg{0.0f};
     float                        m_targetDeg{0.0f};
     float                        m_speedDegPerSec{kDefaultSpeedDegPerSec};
+    float                        m_velocity{0.0f};
     uint16_t                     m_lastPulseUs{0};
     bool                         m_engaged{false};
+    bool                         m_velocityMode{false};
 };
 
 } // namespace owlet

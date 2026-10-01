@@ -3,6 +3,7 @@
 // PCA9685 driver → VirtualI2CBus → PCA9685Simulator. Asserts on the PWM
 // counts the real chip would be driving.
 
+#include "FakeClock.hpp"
 #include "FakeSerialPort.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
@@ -86,7 +87,8 @@ protected:
     Servo                          tilt{tiltCh, Servo::Calibration{}};
     PanTilt                        head{pan, tilt};
     ::owlet::test::FakeSerialPort  port;
-    NmeaProtocol                   nmea{port, head, "test"};
+    ::owlet::test::FakeClock       clock;
+    NmeaProtocol                   nmea{port, head, clock, "test"};
     ProtocolMux<1>                 mux{{&nmea}};
     ControlLoop                    proc{port, head, mux};
     uint32_t                       now{0};

@@ -50,7 +50,7 @@ constexpr uint8_t kArgs0  = 1U << 0;
 constexpr uint8_t kArgs1  = 1U << 1;
 constexpr uint8_t kArgs2  = 1U << 2;
 
-constexpr std::array<CommandSpec, 11> kCommands{{
+constexpr std::array<CommandSpec, 14> kCommands{{
     {"PING", Command::Ping, kArgs0, false},
     {"ENABLE", Command::Enable, kArgs0 | kArgs2, false},
     {"DISABLE", Command::Disable, kArgs0, false},
@@ -62,6 +62,9 @@ constexpr std::array<CommandSpec, 11> kCommands{{
     {"POS", Command::Pos, kArgs0, false},
     {"STREAM", Command::Stream, kArgs1, true},
     {"LIMITS", Command::Limits, kArgs0, false},
+    {"VEL", Command::Vel, kArgs2, false},
+    {"WATCHDOG", Command::Watchdog, kArgs0 | kArgs1, true},
+    {"CLOCK", Command::Clock, kArgs0, false},
 }};
 
 } // namespace

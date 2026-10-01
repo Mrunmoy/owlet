@@ -1,7 +1,7 @@
 <h1 align="center">🦉 owlet</h1>
 
 <p align="center">
-  <b>A USB pan-tilt head you can drive from any computer, in any language.</b><br>
+  <b>A USB pan-tilt head you can drive from any computer, in any language, built for camera tracking.</b><br>
   ESP32-S3 · PCA9685 · two 180° servos · one USB cable · a plain-text protocol with checksums
 </p>
 
@@ -26,6 +26,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 
 - [Features](#features)
 - [How it works](#how-it-works)
+- [Object tracking](#object-tracking)
 - [Hardware](#hardware)
 - [Quick start](#quick-start)
 - [Usage](#usage)
@@ -34,6 +35,8 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
   - [Any other language: the wire protocol](#any-other-language-the-wire-protocol)
   - [No hardware? Use the simulator](#no-hardware-use-the-simulator)
 - [Protocol reference](#protocol-reference)
+- [Extending owlet](#extending-owlet)
+- [Using owlet as a git submodule](#using-owlet-as-a-git-submodule)
 - [Configuration and calibration](#configuration-and-calibration)
 - [Safety](#safety)
 - [Building from source](#building-from-source)
@@ -50,12 +53,16 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 
 - **Plug in and go.** The ESP32-S3's built-in USB shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
 - **Human-readable, checksummed protocol.** NMEA-style lines like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
-- **Know where it is.** Poll the position with `$POS` or stream it at up to 50 Hz. The head also reports `$ARRIVED` when a move finishes.
+- **Know where it is, and when.** Poll the position with `$POS` or stream it at up to 50 Hz. Every report is timestamped with the device clock, and the client maps those timestamps onto your PC's clock, so you can ask "where was the camera pointing when this frame was taken?"
+- **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
 - **Smooth, speed-limited motion.** Constant-velocity slew from 1 to 500 °/s, timed from the actual elapsed time so it doesn't speed up or slow down with loop timing.
 - **Safe by default.** The servos are limp at power-up and nothing moves until you explicitly enable it.
+- **Pluggable protocols (SOLID).** The firmware core knows nothing about any wire format. Protocols are `IProtocol` plug-ins injected at start-up, several can share the USB port, and you can add your own (Pelco-D, G-code, binary, …) without touching owlet's code.
+- **Submodule-friendly.** CMake `owlet::` targets, an ESP-IDF component list, and a `pip`-installable client.
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
-- **Tested.** 126 automated tests: C++ unit and integration tests, plus Python end-to-end tests against the simulator.
+- **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
+- **Tested.** 267 automated tests: 203 C++ unit and integration tests, plus 64 Python tests, including end-to-end runs against the simulator. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -67,7 +74,47 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
                   $ACK,MOVE*74
 ```
 
-The firmware runs a 100 Hz loop. Each pass it advances both servos toward their targets at the configured speed, then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The ESP32-specific code only connects it to the real USB port and I²C bus.
+The firmware runs a 100 Hz loop. Each pass it advances both servos (position slew or velocity mode, plus the watchdog), lets the protocol emit time-driven messages (arrival, streamed position, timeouts), then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The ESP32-specific code only connects it to the real USB port, clock and I²C bus.
+
+## Object tracking
+
+owlet is designed to be the motion half of a camera tracker: the PC runs the detector, and owlet turns the camera.
+
+```python
+import time
+from owlet import Owlet, PixelController, Tracker
+
+ctl = PixelController(fov_h_deg=70, fov_v_deg=43, gain=3.0)    # your camera's field of view
+
+with Owlet() as head:
+    head.enable()
+    with Tracker(head, stream_hz=50, watchdog_ms=300) as tr:   # syncs clocks, streams pose
+        while True:
+            frame, t_capture = grab_frame()                     # t_capture = time.monotonic()
+            target = detect(frame)                              # e.g. YOLO → pixel centre
+            if target is None:
+                tr.set_rates(0, 0)
+                continue
+            pan, tilt = ctl.update(target.x, target.y, frame.width, frame.height,
+                                   pose_at_capture=tr.pose_at(t_capture),
+                                   pose_now=tr.pose_at(time.monotonic()))
+            tr.set_rates(pan, tilt)                             # $VEL, no waiting for the ACK
+```
+
+| Piece | What it does |
+|-------|--------------|
+| `$VEL,<pan>,<tilt>` | Turn at signed rates (°/s). A new command replaces the old one immediately; nothing queues. |
+| Watchdog (`$WATCHDOG`) | If no `VEL` arrives within the timeout (default 500 ms), the head stops by itself and reports `$TIMEOUT,VEL`. A crashed tracker can't leave the head spinning. |
+| Timestamped `$POS` | Each streamed pose carries the device time it was computed. |
+| `Tracker` | Background reader that syncs the device clock (minimum round-trip `$CLOCK` sample, refreshed every 5 s), keeps a pose history and sends rates fire-and-forget. If the link breaks or the device reboots, `tr.failed` is set, `tr.last_error` says why, and `set_rates()` raises rather than failing silently. |
+| `PixelController` | Pixel offset → angle (pinhole geometry) → rate (gain, deadband, rate limit). Given the pose at capture and the pose now, it subtracts the motion that happened while the detector was running. |
+
+A complete webcam + YOLO script is in [`tools/python/examples/track_object.py`](tools/python/examples/track_object.py):
+
+```bash
+pip install ./tools/python opencv-python ultralytics
+python tools/python/examples/track_object.py --target person --fov-h 70 --fov-v 43 --show
+```
 
 ## Hardware
 
@@ -128,7 +175,7 @@ pip install ./tools/python
 ### 3. Say hello
 
 ```bash
-owlet ping                  # owlet 0.1.0 (protocol v1) on /dev/ttyACM1
+owlet ping                  # owlet 0.2.0 (protocol v2) on /dev/ttyACM1
 owlet enable                # servos energise at center (0, 0)
 owlet move 20 0 --wait      # base turns 20° and the command waits until it's there
 owlet pos                   # where is it?
@@ -158,6 +205,9 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 | `owlet speed [DEG_PER_S]` | Get or set the slew speed (1–500 °/s, default 90) |
 | `owlet pos` | Print the current and target position |
 | `owlet limits` | Print the soft limits per axis |
+| `owlet vel PAN TILT` | Velocity mode in °/s (stops after the watchdog period unless repeated) |
+| `owlet watchdog [MS]` | Get or set the velocity watchdog (0 = off, 50–5000 ms) |
+| `owlet clock` | Device clock in ms |
 | `owlet watch [--hz N]` | Live position stream until Ctrl-C |
 | `owlet shell` | Interactive prompt: type `move 30 -15`, `speed 45`, `pos`, … |
 
@@ -173,7 +223,7 @@ with Owlet() as head:                       # or Owlet("/dev/ttyACM1"), Owlet("C
     head.speed(60)                          # °/s
 
     head.move(45, 10, wait=True)            # blocks until $ARRIVED
-    print(head.position())                  # Position(pan=45.0, tilt=10.0, ..., state='H')
+    print(head.position())                  # Position(pan=45.0, tilt=10.0, ..., state='H', t_ms=...)
 
     for p in head.watch(hz=20):             # live stream; streaming stops when you break
         print(p.pan, p.tilt, p.moving)
@@ -220,7 +270,10 @@ An example session (`→` is sent to owlet, `←` comes back):
 ← $ACK,MOVE*74
 ← $ARRIVED,30.0,-15.0*75            (sent when the move completes)
 → $POS*4C
-← $POS,30.0,-15.0,30.0,-15.0,H*28
+← $POS,30.0,-15.0,30.0,-15.0,H,48211*3A
+→ $VEL,-12.5,30*69                  (velocity mode; repeat within the watchdog period)
+← $ACK,VEL*3A
+← $TIMEOUT,VEL*28                   (if you stop sending VEL)
 ```
 
 Serial settings don't matter on native USB (any baud rate works). Open the port normally and **don't toggle DTR/RTS**, because that's the chip's auto-reset signal.
@@ -247,7 +300,7 @@ owlet -p /tmp/owlet watch
 
 | Request | Reply | Notes |
 |---------|-------|-------|
-| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,1,0.1.0` |
+| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,2,0.2.0` |
 | `$ENABLE` | `$ACK,ENABLE` | Energise at the last known position (0, 0 after boot) |
 | `$ENABLE,<pan>,<tilt>` | `$ACK,ENABLE` | Energise at a pose; if already enabled, moves there smoothly instead |
 | `$DISABLE` | `$ACK,DISABLE` | Servos limp |
@@ -257,11 +310,14 @@ owlet -p /tmp/owlet watch
 | `$STOP` | `$ACK,STOP` | Stop at the current position |
 | `$SPEED` | `$SPEED,<°/s>` | Query the slew speed |
 | `$SPEED,<°/s>` | `$ACK,SPEED` | 1–500, applies to both axes |
-| `$POS` | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<state>` | `state`: `D` disabled, `M` moving, `H` holding |
+| `$POS` | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<state>,<ms>` | `state`: `D` disabled, `M` moving, `H` holding; `ms`: device time of the pose |
 | `$STREAM,<hz>` | `$ACK,STREAM` | 0 = off, 1–50 Hz periodic `$POS` |
 | `$LIMITS` | `$LIMITS,<pmin>,<pmax>,<tmin>,<tmax>` | Soft limits in degrees |
+| `$VEL,<pan°/s>,<tilt°/s>` | `$ACK,VEL` | Velocity mode, each −500…500; stops at soft limits; ended by any position command |
+| `$WATCHDOG` / `$WATCHDOG,<ms>` | `$WATCHDOG,<ms>` / `$ACK,WATCHDOG` | Velocity watchdog: 0 = off, 50–5000 ms, default 500 |
+| `$CLOCK` | `$CLOCK,<ms>` | Device uptime in ms (wraps after ~49.7 days) |
 
-Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME` and `STOP` are refused with `NAK …,DIS` until the head is enabled.
+Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v2** (owlet 0.2.0); clients should check the version in `$PONG`.
 
 ### Messages owlet sends on its own
 
@@ -271,6 +327,7 @@ Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have
 | `$ARRIVED,<pan>,<tilt>` | Exactly once for every accepted `MOVE`/`NUDGE`/`HOME` (cancelled by `STOP`/`DISABLE`) |
 | `$POS,…` | At the `STREAM` rate |
 | `$ERR,BUS` | A servo update failed to reach the PCA9685 |
+| `$TIMEOUT,VEL` | The velocity watchdog stopped the head |
 
 ### Errors
 
@@ -288,6 +345,65 @@ Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have
 Every valid request gets exactly one reply, in order. The full specification, including edge cases and the reasoning behind them, is in [`docs/DESIGN.md` §5](docs/DESIGN.md#5-wire-protocol-v1).
 
 > **About "position":** hobby servos don't report where they actually are. owlet reports the position it has *commanded*, rate-limited the same way the servo moves. At normal speeds the real servo follows it closely. If a servo is blocked or overloaded, the two will differ.
+
+## Extending owlet
+
+The firmware is organised around small interfaces, so you can extend it by **adding** classes rather than editing existing ones:
+
+| Interface | Implement it to… |
+|-----------|-------------------|
+| `owlet::core::IProtocol` | add a wire protocol (Pelco-D for PTZ software, G-code, a compact binary format, …) |
+| `owlet::core::IPanTilt` | drive a different mechanism (steppers, another servo controller) under every existing protocol |
+| `owlet::hal::IServoChannel` | output servo pulses from something other than a PCA9685 (e.g. ESP32 LEDC) |
+| `owlet::hal::IByteSource` / `IByteSink` | carry the protocol over another transport (UART, TCP, BLE) |
+
+A protocol is about 100 lines. It only ever sees `IPanTilt` (what it may ask the head to do) and `IByteSink` (where replies go):
+
+```cpp
+class MyProtocol final : public owlet::core::IProtocol {
+public:
+    MyProtocol(owlet::hal::IByteSink& out, owlet::core::IPanTilt& head);
+    bool claims(uint8_t byte, bool atLineStart) const override;   // e.g. byte == 0xFF
+    owlet::core::ConsumeResult consume(const uint8_t* data, std::size_t len) override;
+    void begin(uint32_t nowMs) override;
+    void onTick(uint32_t nowMs, const owlet::core::TickStatus& status) override;
+};
+```
+
+Then, in `apps/esp32-owlet/main/main.cpp`, run it next to the built-in protocol on the same USB port:
+
+```cpp
+static owlet::nmea::NmeaProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
+static MyProtocol                   mine(usb, head);
+static owlet::core::ProtocolMux<2>  protocols({&native, &mine});
+static owlet::core::ControlLoop     loop(usb, head, protocols);
+```
+
+The multiplexer offers the first byte of each frame to each protocol in order. Native frames start with `$`, so anything else is free for your protocol. The contract and an example test setup are in [`docs/DESIGN.md` §4.3–4.4](docs/DESIGN.md#43-the-iprotocol-contract).
+
+## Using owlet as a git submodule
+
+```bash
+git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
+```
+
+- **Python (PC side):** `pip install -e third_party/owlet/tools/python`, then `from owlet import Owlet, Tracker, PixelController`.
+- **Host C++ (tests, simulators):** `add_subdirectory(third_party/owlet)` and link `owlet::core`, `owlet::nmea`, `owlet::servo`, `owlet::pca9685` or `owlet::hal`. owlet's own tests and tools are built only when it's the top-level project.
+- **ESP-IDF firmware:** in your project's `CMakeLists.txt`:
+
+  ```cmake
+  include(${CMAKE_CURRENT_LIST_DIR}/third_party/owlet/cmake/owlet-idf-components.cmake)
+  list(APPEND EXTRA_COMPONENT_DIRS ${OWLET_IDF_COMPONENT_DIRS})
+  ```
+
+  then `REQUIRES owlet_core owlet_nmea owlet_pca9685 owlet_esp32` in your `main` component, and wire things up as `apps/esp32-owlet/main/main.cpp` does.
+
+  **Copy the console settings too.** The USB port must carry only protocol traffic, so add these to your project's `sdkconfig.defaults` (see `apps/esp32-owlet/sdkconfig.defaults`). Without them, ESP-IDF log lines are mixed into protocol frames.
+
+  ```
+  CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+  CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+  ```
 
 ## Configuration and calibration
 
@@ -388,12 +504,16 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 
 ## Project status and roadmap
 
-**v0.1.0, alpha.** The firmware, protocol, PC client and simulator are complete and tested. Motion has been verified on real hardware.
+**v0.2.0, alpha.** The firmware, protocol, PC client, tracking support and simulator are complete and tested. Basic motion (v0.1) has been verified on real hardware; v0.2's velocity mode and watchdog are verified in the simulator and not yet on hardware.
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection
 - [x] Host simulator and end-to-end tests
 - [x] First motion on hardware
+- [x] Pluggable protocol architecture (`IProtocol`, `ProtocolMux`)
+- [x] Tracking support: velocity mode, watchdog, timestamped pose, clock sync, `Tracker`, `PixelController`
+- [ ] Verify velocity mode and watchdog on hardware
+- [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))
 - [ ] Verify the client on Windows and macOS
 - [ ] Separate speed per axis

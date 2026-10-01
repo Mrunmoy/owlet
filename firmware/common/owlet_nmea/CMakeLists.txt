@@ -15,6 +15,7 @@ if(ESP_PLATFORM)
 else()
     add_library(owlet_nmea STATIC ${OWLET_NMEA_SRCS})
     add_library(owlet::nmea ALIAS owlet_nmea)
+    target_compile_features(owlet_nmea PUBLIC cxx_std_17)
     target_include_directories(owlet_nmea PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )

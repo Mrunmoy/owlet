@@ -6,12 +6,14 @@ Override the binary path with OWLET_SIM=/path/to/owlet_sim.
 
 import os
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from owlet import Owlet, OwletError
+from owlet.tracking import Tracker
 
 REPO = Path(__file__).resolve().parents[3]
 SIM = Path(os.environ.get("OWLET_SIM", REPO / "build/host/apps/host-sim/owlet_sim"))
@@ -35,8 +37,8 @@ class EndToEndTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handshake(self):
-        self.assertEqual(self.head.protocol_version, 1)
-        self.assertEqual(self.head.firmware_version, "0.1.0")
+        self.assertEqual(self.head.protocol_version, 2)
+        self.assertEqual(self.head.firmware_version, "0.2.0")
 
     def test_boots_disabled_and_refuses_motion(self):
         self.assertFalse(self.head.position().enabled)
@@ -49,6 +51,7 @@ class EndToEndTest(unittest.TestCase):
         self.head.speed(400)
         final = self.head.move(30, -15, wait=True, timeout=3)
         self.assertEqual((final.pan, final.tilt, final.state), (30.0, -15.0, "H"))
+        self.assertIsInstance(final.t_ms, int)
 
     def test_range_is_enforced(self):
         self.head.enable()
@@ -70,18 +73,91 @@ class EndToEndTest(unittest.TestCase):
         # Streaming is switched off on exit; a normal request must still work.
         self.assertEqual(self.head.speed(), 100.0)
 
+    def test_velocity_and_watchdog_timeout(self):
+        events = []
+        self.head.on_event = events.append
+        self.head.enable()
+        self.assertEqual(self.head.watchdog(), 500)
+        self.head.watchdog(200)
+        self.head.velocity(30, 0)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not any(e.name == "TIMEOUT" for e in events):
+            s = self.head.read_sentence(timeout=0.1)
+            if s is not None:
+                events.append(s)
+        self.assertTrue(any(e.name == "TIMEOUT" and e.fields == ("VEL",) for e in events))
+        p = self.head.position()
+        self.assertEqual(p.state, "H")
+        self.assertGreater(p.pan, 3.0)   # moved for ~200 ms at 30°/s
+        self.assertLess(p.pan, 12.0)
+
+    def test_velocity_refused_while_disabled(self):
+        with self.assertRaises(OwletError) as cm:
+            self.head.velocity(10, 0)
+        self.assertEqual(cm.exception.code, "DIS")
+
+    def test_clock_tracks_host_monotonic_time(self):
+        a = self.head.clock()
+        time.sleep(0.2)
+        b = self.head.clock()
+        self.assertGreaterEqual((b - a) % 2**32, 150)
+        self.assertLessEqual((b - a) % 2**32, 400)
+
+    def test_tracker_follows_rates_and_stops_cleanly(self):
+        self.head.enable()
+        with Tracker(self.head, stream_hz=50, watchdog_ms=300) as tr:
+            start = time.monotonic()
+            while time.monotonic() - start < 0.6:
+                tr.set_rates(40, -20)
+                time.sleep(0.05)
+            latest = tr.latest
+            self.assertIsNotNone(latest)
+            self.assertGreater(latest.pan, 10.0)
+            self.assertLess(latest.tilt, -5.0)
+            self.assertGreater(len(tr.history), 15)
+            # Device timestamps map onto the host clock.
+            self.assertLess(abs(tr.history.latest_time - time.monotonic()), 0.25)
+            mid = tr.pose_at(time.monotonic() - 0.3)
+            self.assertLess(mid.pan, latest.pan)
+            self.assertIsNone(tr.last_error)
+        # Leaving the context stops velocity mode and streaming.
+        p = self.head.position()
+        self.assertEqual(p.state, "H")
+        time.sleep(0.3)
+        self.assertEqual(self.head.position().pan, p.pan)
+
+    def test_tracker_records_refusals_without_raising(self):
+        with Tracker(self.head, stream_hz=20) as tr:  # head is still disabled
+            tr.set_rates(10, 0)
+            deadline = time.monotonic() + 1.0
+            while tr.last_error is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(tr.last_error.code, "DIS")
+
+    def test_tracker_reports_watchdog_trip_when_rates_stop_coming(self):
+        self.head.enable()
+        with Tracker(self.head, watchdog_ms=150) as tr:
+            tr.set_rates(30, 0)
+            time.sleep(0.5)
+            self.assertEqual(tr.timeouts, 1)
+            self.assertEqual(tr.latest.state, "H")
+
     def test_cli(self):
         def cli(*args):
             return subprocess.run([sys.executable, "-m", "owlet", "-p", self.link, *args],
                                   capture_output=True, text=True, timeout=10,
                                   cwd=REPO / "tools/python")
-        self.assertIn("protocol v1", cli("ping").stdout)
+        self.assertIn("protocol v2", cli("ping").stdout)
         self.assertEqual(cli("enable").returncode, 0)
         out = cli("move", "10", "-20", "--wait").stdout
         self.assertIn("pan   10.0  tilt  -20.0", out)
         bad = cli("move", "100", "0")
         self.assertEqual(bad.returncode, 1)
         self.assertIn("RNG", bad.stderr)
+        self.assertEqual(cli("watchdog", "250").returncode, 0)
+        self.assertIn("250 ms", cli("watchdog").stdout)
+        self.assertEqual(cli("vel", "5", "0").returncode, 0)
+        self.assertEqual(cli("stop").returncode, 0)
 
 
 if __name__ == "__main__":

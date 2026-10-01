@@ -1,5 +1,7 @@
 #include "owlet/core/PanTilt.hpp"
 
+#include <cmath>
+
 namespace owlet::core
 {
 
@@ -11,13 +13,11 @@ PanTilt::PanTilt(Servo& pan, Servo& tilt) : m_pan(pan), m_tilt(tilt) {}
 
 PanTilt::Result PanTilt::enable()
 {
-    if (m_pan.engaged() && m_tilt.engaged())
-    {
-        return Result::Ok;
-    }
     // Last known position, not target: after a mid-move DISABLE the horn is
     // near the position estimate, so energising there keeps the snap small.
-    if (!m_pan.engageAt(m_pan.positionDeg()) || !m_tilt.engageAt(m_tilt.positionDeg()))
+    // Axes that are still powered are left alone.
+    if ((!m_pan.engaged() && !m_pan.engageAt(m_pan.positionDeg())) ||
+        (!m_tilt.engaged() && !m_tilt.engageAt(m_tilt.positionDeg())))
     {
         releaseBoth();
         return Result::Bus;
@@ -31,11 +31,17 @@ PanTilt::Result PanTilt::enableAt(float panDeg, float tiltDeg)
     {
         return Result::Range;
     }
-    if (m_pan.engaged() && m_tilt.engaged())
+    // A powered axis must never snap: it slews to its pose instead.
+    const auto bring = [](Servo& s, float deg)
     {
-        return move(panDeg, tiltDeg);
-    }
-    if (!m_pan.engageAt(panDeg) || !m_tilt.engageAt(tiltDeg))
+        if (s.engaged())
+        {
+            s.setTarget(deg);
+            return true;
+        }
+        return s.engageAt(deg);
+    };
+    if (!bring(m_pan, panDeg) || !bring(m_tilt, tiltDeg))
     {
         releaseBoth();
         return Result::Bus;
@@ -60,7 +66,7 @@ void PanTilt::releaseBoth()
 
 PanTilt::Result PanTilt::move(float panDeg, float tiltDeg)
 {
-    if (state() == State::Disabled)
+    if (!bothEngaged())
     {
         return Result::Disabled;
     }
@@ -75,9 +81,13 @@ PanTilt::Result PanTilt::move(float panDeg, float tiltDeg)
 
 PanTilt::Result PanTilt::nudge(float dPanDeg, float dTiltDeg)
 {
-    if (state() == State::Disabled)
+    if (!bothEngaged())
     {
         return Result::Disabled;
+    }
+    if (!std::isfinite(dPanDeg) || !std::isfinite(dTiltDeg))
+    {
+        return Result::Range;
     }
     m_pan.setTarget(m_pan.targetDeg() + dPanDeg);
     m_tilt.setTarget(m_tilt.targetDeg() + dTiltDeg);
@@ -91,7 +101,7 @@ PanTilt::Result PanTilt::home()
 
 PanTilt::Result PanTilt::stop()
 {
-    if (state() == State::Disabled)
+    if (!anyEngaged())
     {
         return Result::Disabled;
     }
@@ -102,7 +112,8 @@ PanTilt::Result PanTilt::stop()
 
 PanTilt::Result PanTilt::setSpeed(float degPerSec)
 {
-    if (degPerSec < Servo::kMinSpeedDegPerSec || degPerSec > Servo::kMaxSpeedDegPerSec)
+    // Negated so NaN fails the check too.
+    if (!(degPerSec >= Servo::kMinSpeedDegPerSec && degPerSec <= Servo::kMaxSpeedDegPerSec))
     {
         return Result::Range;
     }
@@ -111,13 +122,73 @@ PanTilt::Result PanTilt::setSpeed(float degPerSec)
     return Result::Ok;
 }
 
+PanTilt::Result PanTilt::setVelocity(float panDegPerSec, float tiltDegPerSec)
+{
+    if (panDegPerSec == 0.0f && tiltDegPerSec == 0.0f)
+    {
+        return stop();  // "stop" must work even on a partially engaged head
+    }
+    if (!bothEngaged())
+    {
+        return Result::Disabled;
+    }
+    const float vmax = Servo::kMaxSpeedDegPerSec;
+    // Written as negated comparisons so NaN is rejected too.
+    if (!(panDegPerSec >= -vmax && panDegPerSec <= vmax) ||
+        !(tiltDegPerSec >= -vmax && tiltDegPerSec <= vmax))
+    {
+        return Result::Range;
+    }
+    m_pan.setVelocity(panDegPerSec);
+    m_tilt.setVelocity(tiltDegPerSec);
+    m_velocityAgeMs = 0;
+    return Result::Ok;
+}
+
+PanTilt::Result PanTilt::setWatchdog(uint32_t ms)
+{
+    if (ms != 0 && (ms < kMinWatchdogMs || ms > kMaxWatchdogMs))
+    {
+        return Result::Range;
+    }
+    m_watchdogMs = ms;
+    return Result::Ok;
+}
+
+bool PanTilt::inVelocityMode() const
+{
+    return m_pan.inVelocityMode() || m_tilt.inVelocityMode();
+}
+
 TickStatus PanTilt::tick(uint32_t dtMs)
 {
+    // Motion advances by at most kMaxStepMs so a starved loop doesn't lurch;
+    // the watchdog below still sees the real elapsed time.
+    const uint32_t step = (dtMs < kMaxStepMs) ? dtMs : kMaxStepMs;
     // Tick both even if one fails so a single bad axis can't freeze the other.
-    const bool panOk  = m_pan.tick(dtMs);
-    const bool tiltOk = m_tilt.tick(dtMs);
+    const bool panOk  = m_pan.tick(step);
+    const bool tiltOk = m_tilt.tick(step);
     TickStatus status;
     status.busOk = panOk && tiltOk;
+
+    // The motion for this step happens first: a refreshed command is honoured
+    // for exactly one watchdog period before the head is stopped.
+    if (m_watchdogMs != 0 && inVelocityMode())
+    {
+        // Saturating add: a huge dt must trip the watchdog, never wrap past
+        // it. The first test also covers a watchdog lowered below the current
+        // age, and keeps the subtraction from underflowing.
+        m_velocityAgeMs = (m_velocityAgeMs >= m_watchdogMs ||
+                           dtMs >= m_watchdogMs - m_velocityAgeMs)
+                              ? m_watchdogMs
+                              : m_velocityAgeMs + dtMs;
+        if (m_velocityAgeMs >= m_watchdogMs)
+        {
+            m_pan.stop();
+            m_tilt.stop();
+            status.watchdogTripped = true;
+        }
+    }
     return status;
 }
 
@@ -125,7 +196,7 @@ TickStatus PanTilt::tick(uint32_t dtMs)
 
 PanTilt::State PanTilt::state() const
 {
-    if (!m_pan.engaged() || !m_tilt.engaged())
+    if (!anyEngaged())
     {
         return State::Disabled;
     }
@@ -154,7 +225,7 @@ PanTilt::Limits PanTilt::limits() const
 
 bool PanTilt::inLimits(const Servo& s, float deg)
 {
-    return deg >= s.minDeg() && deg <= s.maxDeg();
+    return deg >= s.minDeg() && deg <= s.maxDeg();  // false for NaN
 }
 
 } // namespace owlet::core

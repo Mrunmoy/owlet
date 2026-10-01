@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from functools import reduce
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_LINE_LEN = 82
 
 _NAME_RE = re.compile(r"^[A-Z]{1,10}$")
@@ -36,13 +36,18 @@ class Sentence:
 
 @dataclass(frozen=True)
 class Position:
-    """A $POS report. Angles in degrees; state is D (disabled), M or H."""
+    """A $POS report. Angles in degrees; state is D (disabled), M or H.
+
+    ``t_ms`` is the device uptime (ms, wraps at 2**32) at which the pose was
+    computed. Use ``owlet.tracking.DeviceClock`` to map it to host time.
+    """
 
     pan: float
     tilt: float
     target_pan: float
     target_tilt: float
     state: str
+    t_ms: int
 
     @property
     def enabled(self) -> bool:
@@ -95,7 +100,10 @@ def decode(line: str) -> Sentence:
 
 
 def parse_position(sentence: Sentence) -> Position:
-    if sentence.name != "POS" or len(sentence.fields) != 5:
-        raise ProtocolError(f"not a POS report: {sentence}")
-    p, t, tp, tt, state = sentence.fields
-    return Position(float(p), float(t), float(tp), float(tt), state)
+    if sentence.name != "POS" or len(sentence.fields) != 6:
+        raise ProtocolError(f"not a v2 POS report: {sentence}")
+    p, t, tp, tt, state, ms = sentence.fields
+    try:
+        return Position(float(p), float(t), float(tp), float(tt), state, int(ms))
+    except ValueError as e:
+        raise ProtocolError(f"bad POS field in {sentence}") from e

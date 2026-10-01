@@ -9,7 +9,8 @@ namespace owlet::core
 // protocol so each can report it in its own dialect.
 struct TickStatus
 {
-    bool busOk{true};  // false: a servo update failed to reach the hardware
+    bool busOk{true};             // false: a servo update failed to reach the hardware
+    bool watchdogTripped{false};  // true once: velocity mode stopped for lack of refresh
 };
 
 // Something advanced by elapsed time. Only ControlLoop calls tick(); protocols

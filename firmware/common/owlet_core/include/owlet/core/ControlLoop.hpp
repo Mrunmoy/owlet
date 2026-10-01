@@ -11,17 +11,18 @@ namespace owlet::core
 {
 
 // Protocol-agnostic scheduler. Each service() call:
-//   1. advances motion by the elapsed time (capped),
+//   1. advances motion by the real elapsed time (the motion layer caps its
+//      own step; timeouts such as the watchdog need wall time),
 //   2. lets the protocol emit time-driven output for that step,
-//   3. drains pending input into the protocol.
+//   3. feeds pending input to the protocol, at most kMaxChunksPerService
+//      chunks, so a flood can't stall motion or the watchdog.
 // Motion runs before input so a reply is never preceded by an event its own
 // request caused.
 class ControlLoop
 {
 public:
-    // A starved loop resumes with at most this much motion per step.
-    static constexpr uint32_t    kMaxTickMs = 100;
-    static constexpr std::size_t kReadChunk = 64;
+    static constexpr std::size_t kReadChunk           = 64;
+    static constexpr std::size_t kMaxChunksPerService = 4;  // 256 B per 10 ms ≈ 25 KB/s
 
     ControlLoop(::owlet::hal::IByteSource& input, ITickable& motion, IProtocol& protocol);
 

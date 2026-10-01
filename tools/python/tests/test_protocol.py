@@ -56,10 +56,19 @@ class DecodeTest(unittest.TestCase):
             checked += 1
         self.assertGreater(checked, 20)
 
-    def test_fields(self):
-        s = decode("$POS,12.5,-3.0,30.0,-15.0,M*1F\r\n")
+    def test_position_carries_device_timestamp(self):
+        s = decode(encode("POS", 12.5, -3.0, 30.0, -15.0, "M", 123456).decode())
         self.assertEqual(s.name, "POS")
-        self.assertEqual(parse_position(s), Position(12.5, -3.0, 30.0, -15.0, "M"))
+        self.assertEqual(parse_position(s), Position(12.5, -3.0, 30.0, -15.0, "M", 123456))
+
+    def test_v1_position_without_timestamp_is_rejected(self):
+        from owlet.protocol import ProtocolError
+        with self.assertRaises(ProtocolError):
+            parse_position(decode("$POS,12.5,-3.0,30.0,-15.0,M*1F"))
+
+    def test_protocol_version_is_2(self):
+        from owlet.protocol import PROTOCOL_VERSION
+        self.assertEqual(PROTOCOL_VERSION, 2)
 
     def test_round_trip(self):
         frame = encode("NUDGE", 1.5, -2).decode()

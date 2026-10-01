@@ -8,10 +8,13 @@
 namespace owlet::core
 {
 
+// consumed > 0              : took these bytes (released=true at end of frame)
+// consumed == 0, released    : "not mine" — give this byte to another protocol
+// consumed == 0, !released   : not allowed (the caller drops the byte)
 struct ConsumeResult
 {
-    std::size_t consumed;  // bytes taken; must be > 0 whenever input was offered
-    bool        released;  // true at the end of a frame: the stream is free again
+    std::size_t consumed;
+    bool        released;
 };
 
 // A wire protocol: turns bytes into IPanTilt calls and writes replies to the

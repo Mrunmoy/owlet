@@ -9,6 +9,7 @@
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
+#include "owlet/hal/IClock.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/hal/ISerialPort.hpp"
 #include "owlet/nmea/NmeaProtocol.hpp"
@@ -98,12 +99,18 @@ private:
     int m_fd{-1};
 };
 
-uint32_t millis()
+// steady_clock is CLOCK_MONOTONIC on Linux, the same clock Python's
+// time.monotonic() reads, which keeps clock-sync tests meaningful.
+class SteadyClock final : public ::owlet::hal::IClock
 {
-    using namespace std::chrono;
-    return static_cast<uint32_t>(
-        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
-}
+public:
+    [[nodiscard]] uint32_t nowMs() const override
+    {
+        using namespace std::chrono;
+        return static_cast<uint32_t>(
+            duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+    }
+};
 
 } // namespace
 
@@ -156,12 +163,13 @@ int main(int argc, char** argv)
     std::printf("%s\n", link.empty() ? port.slavePath() : link.c_str());
     std::fflush(stdout);
 
-    ::owlet::nmea::NmeaProtocol protocol(port, head, ::owlet::core::kFirmwareVersion);
+    SteadyClock                 clock;
+    ::owlet::nmea::NmeaProtocol protocol(port, head, clock, ::owlet::core::kFirmwareVersion);
     ::owlet::core::ControlLoop  loop(port, head, protocol);
-    loop.begin(millis());
+    loop.begin(clock.nowMs());
     while (g_stop == 0)
     {
-        loop.service(millis());
+        loop.service(clock.nowMs());
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!link.empty())

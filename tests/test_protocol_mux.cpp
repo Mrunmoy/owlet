@@ -23,10 +23,69 @@ void feed(::owlet::core::IProtocol& p, const std::string& s)
     while (at < s.size())
     {
         const ConsumeResult r = p.consume(data + at, s.size() - at);
-        ASSERT_GT(r.consumed, 0u);
-        at += r.consumed;
+        at += (r.consumed != 0) ? r.consumed : 1;  // same rule as ControlLoop
     }
 }
+
+// Binary frames of fixed length starting with 0xFF (Pelco-D-like).
+class FakeBinary final : public ::owlet::core::IProtocol
+{
+public:
+    [[nodiscard]] bool claims(uint8_t byte, bool) const override { return byte == 0xFF; }
+    [[nodiscard]] ConsumeResult consume(const uint8_t* data, std::size_t len) override
+    {
+        for (std::size_t i = 0; i < len; ++i)
+        {
+            current.push_back(data[i]);
+            if (current.size() == 7)
+            {
+                ++frames;
+                current.clear();
+                return {i + 1, true};
+            }
+        }
+        return {len, false};
+    }
+    void begin(uint32_t) override {}
+    void onTick(uint32_t, const TickStatus&) override {}
+
+    std::vector<uint8_t> current;
+    int                  frames{0};
+};
+
+// Owns '$' lines but gives the stream back, unconsumed, at any byte >= 0x80.
+class YieldingProtocol final : public ::owlet::core::IProtocol
+{
+public:
+    [[nodiscard]] bool claims(uint8_t byte, bool) const override { return byte == '$'; }
+    [[nodiscard]] ConsumeResult consume(const uint8_t* data, std::size_t len) override
+    {
+        for (std::size_t i = 0; i < len; ++i)
+        {
+            if (data[i] >= 0x80)
+            {
+                return {i, true};  // not mine: re-arbitrate this byte
+            }
+            if (data[i] == '\n')
+            {
+                return {i + 1, true};
+            }
+        }
+        return {len, false};
+    }
+    void begin(uint32_t) override {}
+    void onTick(uint32_t, const TickStatus&) override {}
+};
+
+// Claims everything and never consumes: must not hang the mux.
+class StuckProtocol final : public ::owlet::core::IProtocol
+{
+public:
+    [[nodiscard]] bool claims(uint8_t, bool) const override { return true; }
+    [[nodiscard]] ConsumeResult consume(const uint8_t*, std::size_t) override { return {0, true}; }
+    void begin(uint32_t) override {}
+    void onTick(uint32_t, const TickStatus&) override {}
+};
 
 } // namespace
 
@@ -140,4 +199,39 @@ TEST(ProtocolMux, NestedMuxIsAProtocol)
     feed(outer, "#A\n$B\n");
     EXPECT_EQ(hash.frames.size(), 1u);
     EXPECT_EQ(dollar.frames.size(), 1u);
+}
+
+TEST(ProtocolMux, OwnerCanReleaseWithoutConsumingToReArbitrate)  // M2
+{
+    YieldingProtocol text;
+    FakeBinary       bin;
+    ProtocolMux<2>   mux({&text, &bin});
+    feed(mux, "$");  // a stray '$' grabs the stream at the end of one chunk...
+    std::string frames;
+    for (int f = 0; f < 3; ++f)
+    {
+        frames += std::string("\xFF\x01\x00\x04\x20\x00\x25", 7);
+    }
+    feed(mux, frames);  // ...so the next chunk opens with a byte the owner rejects
+    EXPECT_EQ(bin.frames, 3);
+}
+
+TEST(ProtocolMux, FreshClaimThatConsumesNothingIsDroppedNotLooped)
+{
+    StuckProtocol  stuck;
+    ProtocolMux<1> mux({&stuck});
+    const std::string in = "abc";
+    const ConsumeResult r = mux.consume(reinterpret_cast<const uint8_t*>(in.data()), in.size());
+    EXPECT_EQ(r.consumed, in.size());
+}
+
+TEST(ProtocolMux, NestedMuxUsesTheCallersLineStartState)  // L2
+{
+    FakeProtocol   lineOnly('X', false);  // claims 'X' only at line start
+    FakeProtocol   anywhere('X', true);
+    ProtocolMux<2> inner({&lineOnly, &anywhere});
+    ProtocolMux<1> outer({&inner});
+    feed(outer, "noise X1\n");  // the 'X' is mid-line: only `anywhere` may take it
+    EXPECT_TRUE(lineOnly.frames.empty());
+    EXPECT_EQ(anywhere.frames, std::vector<std::string>{"X1\n"});
 }

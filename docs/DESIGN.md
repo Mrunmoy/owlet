@@ -97,9 +97,9 @@ Rules:
 
 `ControlLoop::service(nowMs)` runs at 100 Hz on one task:
 
-1. `ITickable::tick(dt)` advances both servos, with `dt` capped at 100 ms so a starved loop resumes smoothly instead of lurching.
+1. `ITickable::tick(dt)` with the **real** elapsed time. `PanTilt` caps each motion step at 100 ms itself, so a starved loop resumes without lurching, while the watchdog still measures wall time.
 2. `IProtocol::onTick(nowMs, status)` lets the protocol emit time-driven output: arrival events, position streams, watchdog and bus-fault reports.
-3. Bytes are drained from `IByteSource` in 64-byte chunks and handed to `IProtocol::consume()`. Replies are written synchronously to the protocol's `IByteSink`.
+3. At most 4 × 64-byte chunks are read from `IByteSource` and handed to `IProtocol::consume()`, so a flood of input can't stall motion or the watchdog. That's 25 KB/s, far beyond what the protocol needs. Replies are written synchronously to the protocol's `IByteSink`.
 
 Motion is ticked before input is read, so a reply is never preceded by an event caused by the request it answers. One task owns all state, so nothing needs a mutex.
 
@@ -116,9 +116,10 @@ class IProtocol {
 };
 ```
 
-- `consume()` must consume at least one byte when `len > 0`, and reports `released = true` at the end of each frame (for line protocols, at CR/LF).
+- `consume()` returns how many bytes it took and `released = true` at the end of each frame (for line protocols, at CR/LF). It may also return `{0, released}` to mean **"this byte isn't mine"**: the mux offers that byte to the other protocols. `NmeaProtocol` does this on any non-text byte, so a stray `$` can't lock a binary protocol out, and it releases on overflow. Returning `{0, not released}` is a contract violation; the caller drops the byte.
 - `claims()` is only used by `ProtocolMux`. Native frames are claimed on `$` anywhere, which keeps NMEA's resync behaviour. A line protocol such as G-code would claim only at line start (`atLineStart`), and a binary protocol such as Pelco-D would claim its `0xFF` sync byte anywhere.
-- `ProtocolMux<N>` offers each frame's first byte to its protocols in order. The first one that claims it owns the stream until it releases. Bytes nobody claims are dropped up to the end of the line, which is how the ROM boot banner is discarded. The mux feeds whole chunks to the owner, so each chunk costs one virtual call rather than one per byte.
+- `ProtocolMux<N>` offers each frame's first byte to its protocols in order. The first one that claims it owns the stream until it releases. A byte nobody claims is returned to the caller and dropped. That is how the ROM boot banner is discarded: its bytes are dropped one at a time, except a `$`, which the native protocol claims anywhere. The mux feeds whole chunks to the owner, so each chunk costs one virtual call rather than one per byte.
+- "Line start" is true after a CR/LF and at power-up. A nested mux adopts its parent's line-start state (passed through `claims()`), so nested arbitration matches the outer one.
 - The mux is itself an `IProtocol` (composite), so a single protocol and a mux are interchangeable at the composition root.
 
 ### 4.4 Writing your own protocol
@@ -182,7 +183,7 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 | `$STOP`                     | `$ACK,STOP`                           | Target := current position. |
 | `$SPEED`                    | `$SPEED,<deg/s>`                      | Query slew speed. |
 | `$SPEED,<deg/s>`            | `$ACK,SPEED`                          | 1–500 deg/s, both axes. Default 90. |
-| `$POS`                      | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<st>` | See §5.5. |
+| `$POS`                      | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<st>,<ms>` | See §5.5. |
 | `$STREAM,<hz>`              | `$ACK,STREAM`                         | 0 = off, 1–50 Hz periodic `$POS`. |
 | `$LIMITS`                   | `$LIMITS,<pmin>,<pmax>,<tmin>,<tmax>` | Soft limits in degrees. |
 | `$VEL,<pan°/s>,<tilt°/s>`   | `$ACK,VEL`                            | Velocity mode: turn continuously at these signed rates (each −500…500). The head stops at soft limits without error. Replaces any position move (no `$ARRIVED`); any `MOVE`/`NUDGE`/`HOME`/`STOP`/`DISABLE` ends it. Guarded by the watchdog. |
@@ -216,7 +217,7 @@ Frame-level problems use `$ERR` because the command name can't be trusted. Every
 $POS,<pan>,<tilt>,<target_pan>,<target_tilt>,<state>,<ms>
 ```
 
-`state` is `D` (disabled), `M` (moving: slew or velocity mode in progress) or `H` (holding). `ms` is the device uptime at which the pose was sampled, the same clock as `$CLOCK`. In velocity mode the target equals the position.
+`state` is `D` (disabled: no axis powered), `M` (moving: a slew in progress or velocity mode actually turning) or `H` (holding; this includes velocity mode pinned against a soft limit). `ms` is the device uptime at which the pose was sampled, the same clock as `$CLOCK`. In velocity mode the target equals the position.
 
 **Latency compensation.** A tracking loop needs to know where the camera pointed *when a frame was captured*, not when the detection finished. The client estimates the device-to-host clock offset with `$CLOCK` round trips (taking the minimum-RTT sample), stamps every streamed `$POS` with the host time, and interpolates the pose at any host timestamp (§7).
 
@@ -242,7 +243,9 @@ Each axis has a calibration of `minPulseUs`, `centerPulseUs`, `maxPulseUs` and `
 
 ### 6.2 Slew
 
-Each axis moves toward its target at `speed` deg/s, based on elapsed time (`tick(nowMs)`) rather than a per-tick step, so loop jitter doesn't change the speed. Each step is capped at 100 ms worth of motion, so a starved loop resumes smoothly instead of lurching. Both axes use the same speed and slew independently, which means a diagonal move finishes the shorter axis first.
+Each axis moves toward its target at `speed` deg/s, based on elapsed time (`tick(nowMs)`) rather than a per-tick step, so loop jitter doesn't change the speed. Each step is capped at 100 ms worth of motion (in `PanTilt`), so a starved loop resumes smoothly instead of lurching. The velocity watchdog measures real elapsed time, not capped time. Both axes use the same speed and slew independently, which means a diagonal move finishes the shorter axis first.
+
+**Partial failure.** If `DISABLE` can't release one axis (an I2C error), that axis stops moving before the release is attempted and stays powered. The head then reports `H`, not `D`. New motion is refused, `STOP` and `VEL,0,0` still work, and retrying `DISABLE` completes the job. `ENABLE,<pan>,<tilt>` on a partly powered head slews the powered axis rather than snapping it.
 
 ### 6.3 Boot and enable (safety)
 
@@ -257,9 +260,9 @@ Hobby servos have no feedback. The reported position is the **commanded pulse** 
 `tools/python/` is a pure-Python package (`pip install ./tools/python`; only needs `pyserial`):
 
 - `owlet.protocol`: encode, decode and checksum (no I/O; unit-tested against `docs/protocol_vectors.txt`, the same file the C++ tests read).
-- `owlet.client.Owlet`: high-level API (`ping()`, `enable()`, `move()`, `position()`, `stream()`, ...) that waits for `$READY` and matches replies by name.
+- `owlet.client.Owlet`: high-level API (`ping()`, `enable()`, `move()`, `velocity()`, `position()`, `stream()`, ...). It handshakes with `PING` (retrying through boot noise) and matches replies by name. Unsolicited lines (`ERR,BUS`, `POS` stream, `ARRIVED`, `TIMEOUT`) and late replies to fire-and-forget `send()`s go to `on_event` and are never mistaken for the current request's reply. `transport=` accepts any pyserial-like object (dependency injection for tests or other links).
 - `owlet.tracking`: the pieces of a tracking loop.
-  - `Tracker(head)`: background reader with a 50 Hz `$POS` stream, clock sync, `set_rates()` (sends `VEL` without waiting for each ACK), `pose_at(host_time)` interpolation and a watchdog-friendly refresh.
+  - `Tracker(head)`: background reader with a 50 Hz `$POS` stream, clock sync (repeated every 5 s to follow drift), `set_rates()` (sends `VEL` without waiting for each ACK, clamped to ±500 °/s), and `pose_at(host_time)` interpolation. The watchdog is mandatory (50–5000 ms). Failures are never silent: if the reader dies or the device reboots (a `$READY`, or its clock going backwards), `failed` is set, `last_error` says why, and `set_rates()` raises. `stop()` is best-effort and never raises.
   - `PixelController`: turns a detection's pixel offset into pan/tilt rates using the camera's field of view, a gain, a deadband and a rate limit.
   - `examples/track_object.py`: a webcam + YOLO loop built on these. It is optional and needs `opencv-python` and `ultralytics`, which the library itself doesn't depend on.
 - `owlet` / `python -m owlet`: a CLI (`owlet move 30 -15 --wait`, `owlet pos`, `owlet watch`, `owlet shell`). The port is auto-detected by Espressif's USB VID (`0x303A`).

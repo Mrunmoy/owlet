@@ -7,7 +7,7 @@
 namespace owlet::nmea
 {
 
-inline constexpr uint8_t kProtocolVersion = 1;
+inline constexpr uint8_t kProtocolVersion = 2;
 
 // Longest frame on the wire including '$' and the trailing CRLF (NMEA 0183).
 inline constexpr std::size_t kMaxLineLen = 82;

@@ -22,6 +22,9 @@ enum class Command : uint8_t
     Pos,
     Stream,
     Limits,
+    Vel,
+    Watchdog,
+    Clock,
 };
 
 enum class RequestStatus : uint8_t

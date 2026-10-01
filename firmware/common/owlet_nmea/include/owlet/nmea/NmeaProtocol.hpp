@@ -3,6 +3,7 @@
 #include "owlet/core/IPanTilt.hpp"
 #include "owlet/core/IProtocol.hpp"
 #include "owlet/hal/IByteSink.hpp"
+#include "owlet/hal/IClock.hpp"
 #include "owlet/nmea/LineFramer.hpp"
 #include "owlet/nmea/LineWriter.hpp"
 #include "owlet/nmea/Request.hpp"
@@ -14,16 +15,19 @@ namespace owlet::nmea
 {
 
 // owlet's native "$BODY*HH" protocol (docs/DESIGN.md §5) as an IProtocol.
-// Depends only on IPanTilt and IByteSink, so it runs on any head and any
-// transport.
+// Depends only on IPanTilt, IByteSink and IClock, so it runs on any head and
+// any transport.
 class NmeaProtocol final : public ::owlet::core::IProtocol
 {
 public:
     static constexpr uint32_t kMaxStreamHz = 50;
 
-    NmeaProtocol(::owlet::hal::IByteSink& out,
-                 ::owlet::core::IPanTilt& head,
-                 std::string_view         firmwareVersion);
+    // `clock` stamps $CLOCK replies; $POS is stamped with the tick time of
+    // the pose it reports.
+    NmeaProtocol(::owlet::hal::IByteSink&    out,
+                 ::owlet::core::IPanTilt&    head,
+                 const ::owlet::hal::IClock& clock,
+                 std::string_view            firmwareVersion);
 
     NmeaProtocol(const NmeaProtocol&)            = delete;
     NmeaProtocol& operator=(const NmeaProtocol&) = delete;
@@ -52,11 +56,12 @@ private:
 
     ::owlet::hal::IByteSink& m_out;
     ::owlet::core::IPanTilt& m_head;
+    const ::owlet::hal::IClock& m_clock;
     std::string_view         m_firmwareVersion;
     LineFramer               m_framer;
     LineWriter               m_writer;
 
-    uint32_t m_nowMs{0};
+    uint32_t m_nowMs{0};  // time of the last tick: the pose's timestamp
     uint32_t m_streamPeriodMs{0};  // 0 = streaming off
     uint32_t m_nextStreamMs{0};
     bool     m_awaitingArrival{false};

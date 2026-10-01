@@ -2,6 +2,7 @@
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
 
 namespace owlet::platform::esp32
 {
@@ -22,13 +23,16 @@ std::size_t Esp32UsbSerial::read(uint8_t* out, std::size_t maxLen)
 
 bool Esp32UsbSerial::write(const char* data, std::size_t len)
 {
-    // With no host attached the TX ring never drains; skipping the write
-    // (instead of waiting on a timeout) keeps the control loop on schedule.
+    // With no host attached the TX ring never drains: skip the write so the
+    // control loop stays on schedule.
     if (!usb_serial_jtag_is_connected())
     {
         return false;
     }
-    const int n = usb_serial_jtag_write_bytes(data, len, 0);
+    // A connected but momentarily slow host gets a short grace period rather
+    // than a silently dropped reply (each request is owed exactly one). The
+    // watchdog runs on wall time, so this delay can't extend motion.
+    const int n = usb_serial_jtag_write_bytes(data, len, pdMS_TO_TICKS(kWriteTimeoutMs));
     return n == static_cast<int>(len);
 }
 

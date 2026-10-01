@@ -11,10 +11,11 @@ using ::owlet::core::ConsumeResult;
 using ::owlet::core::IPanTilt;
 using ::owlet::core::TickStatus;
 
-NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink& out,
-                           IPanTilt&                head,
-                           std::string_view         firmwareVersion)
-    : m_out(out), m_head(head), m_firmwareVersion(firmwareVersion)
+NmeaProtocol::NmeaProtocol(::owlet::hal::IByteSink&    out,
+                           IPanTilt&                   head,
+                           const ::owlet::hal::IClock& clock,
+                           std::string_view            firmwareVersion)
+    : m_out(out), m_head(head), m_clock(clock), m_firmwareVersion(firmwareVersion)
 {
 }
 
@@ -30,18 +31,34 @@ ConsumeResult NmeaProtocol::consume(const uint8_t* data, std::size_t len)
 {
     for (std::size_t i = 0; i < len; ++i)
     {
-        switch (m_framer.push(data[i]))
+        const uint8_t b = data[i];
+        const bool    eol = (b == '\r' || b == '\n');
+        if (!eol && (b < 0x20 || b > 0x7E))
+        {
+            // Not text. A request already under way was garbled: it is still
+            // owed a reply. A lone '$' (or no frame at all) is just noise
+            // before somebody else's binary frame: hand back silently. Either
+            // way the byte goes back unconsumed for another protocol.
+            const bool garbled = m_framer.inFrame() && m_framer.frame().size() > 1;
+            m_framer.reset();
+            if (garbled)
+            {
+                sendErr("SYN");
+            }
+            return {i, true};
+        }
+        switch (m_framer.push(b))
         {
         case LineFramer::Event::Frame:
             handleFrame(m_framer.frame());
             break;
         case LineFramer::Event::Overflow:
             sendErr("LEN");
-            break;
+            return {i + 1, true};  // let the mux drop the rest of the line
         case LineFramer::Event::None:
             break;
         }
-        if (data[i] == '\r' || data[i] == '\n')
+        if (eol)
         {
             return {i + 1, true};
         }
@@ -64,6 +81,13 @@ void NmeaProtocol::onTick(uint32_t nowMs, const TickStatus& status)
         sendErr("BUS");
     }
     m_busFault = !status.busOk;
+
+    if (status.watchdogTripped)
+    {
+        m_writer.begin("TIMEOUT");
+        m_writer.field("VEL");
+        flush();
+    }
 
     if (m_awaitingArrival && m_head.state() == IPanTilt::State::Holding)
     {
@@ -127,9 +151,18 @@ void NmeaProtocol::execute(const Request& req)
         sendVersioned("PONG");
         return;
     case Command::Enable:
-        sendResult(req.command,
-                   req.argCount == 2 ? m_head.enableAt(req.a, req.b) : m_head.enable());
+    {
+        // Only ENABLE,<pan>,<tilt> on an already-powered head is a move (and
+        // earns ARRIVED); from disabled it is a snap, and bare ENABLE moves nothing.
+        const bool   wasEnabled = m_head.state() != IPanTilt::State::Disabled;
+        const Result r = req.argCount == 2 ? m_head.enableAt(req.a, req.b) : m_head.enable();
+        if (r == Result::Ok && req.argCount == 2 && wasEnabled)
+        {
+            m_awaitingArrival = true;
+        }
+        sendResult(req.command, r);
         return;
+    }
     case Command::Disable:
         m_awaitingArrival = false;
         sendResult(req.command, m_head.disable());
@@ -179,6 +212,33 @@ void NmeaProtocol::execute(const Request& req)
         sendAck(req.command);
         return;
     }
+    case Command::Vel:
+    {
+        const Result r = m_head.setVelocity(req.a, req.b);
+        if (r == Result::Ok)
+        {
+            m_awaitingArrival = false;  // velocity mode never "arrives"
+        }
+        sendResult(req.command, r);
+        return;
+    }
+    case Command::Watchdog:
+        if (req.argCount == 0)
+        {
+            m_writer.begin("WATCHDOG");
+            m_writer.uint(m_head.watchdogMs());
+            flush();
+            return;
+        }
+        sendResult(req.command, m_head.setWatchdog(static_cast<uint32_t>(req.a)));
+        return;
+    case Command::Clock:
+        // The live clock, not the tick time: this is the sample a host uses
+        // to estimate the clock offset, so it must be as fresh as possible.
+        m_writer.begin("CLOCK");
+        m_writer.uint(m_clock.nowMs());
+        flush();
+        return;
     case Command::Limits:
     {
         const IPanTilt::Limits lim = m_head.limits();
@@ -202,8 +262,7 @@ void NmeaProtocol::sendResult(Command cmd, Result result)
     case Result::Ok:
         // Every accepted motion request earns exactly one ARRIVED, even when
         // the target equals the position, so clients can always wait on it.
-        if (cmd == Command::Move || cmd == Command::Nudge || cmd == Command::Home ||
-            (cmd == Command::Enable && m_head.state() == IPanTilt::State::Moving))
+        if (cmd == Command::Move || cmd == Command::Nudge || cmd == Command::Home)
         {
             m_awaitingArrival = true;
         }
@@ -232,6 +291,7 @@ void NmeaProtocol::sendPos()
     m_writer.fixed1(t.pan);
     m_writer.fixed1(t.tilt);
     m_writer.field(kStateCodes[static_cast<std::size_t>(m_head.state())]);
+    m_writer.uint(m_nowMs);
     flush();
 }
 

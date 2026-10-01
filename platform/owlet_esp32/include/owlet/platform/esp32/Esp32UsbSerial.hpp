@@ -18,6 +18,7 @@ public:
     static constexpr uint32_t kRxBufferBytes = 512;
     // Enough for a full 50 Hz POS stream plus replies between loop turns.
     static constexpr uint32_t kTxBufferBytes = 2048;
+    static constexpr uint32_t kWriteTimeoutMs = 5;
 
     Esp32UsbSerial() = default;
 

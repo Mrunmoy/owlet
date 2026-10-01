@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 using ::owlet::Servo;
 using ::owlet::test::FakeServoChannel;
 
@@ -219,4 +221,160 @@ TEST(Servo, TickPropagatesBusErrorAndRetriesNextTick)
     EXPECT_FLOAT_EQ(s.positionDeg(), 0.0f);
     EXPECT_TRUE(s.tick(50));
     EXPECT_GT(s.positionDeg(), 0.0f);
+}
+
+// ── Velocity mode ───────────────────────────────────────────────────────────
+
+TEST(ServoVelocity, MovesAtSignedRate)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setVelocity(30.0f);
+    ASSERT_TRUE(s.tick(100));
+    EXPECT_NEAR(s.positionDeg(), 3.0f, 1e-4f);
+    ASSERT_TRUE(s.tick(100));
+    EXPECT_NEAR(s.positionDeg(), 6.0f, 1e-4f);
+    EXPECT_TRUE(s.moving());
+    EXPECT_TRUE(s.inVelocityMode());
+    EXPECT_FLOAT_EQ(s.targetDeg(), s.positionDeg());  // target follows position
+
+    s.setVelocity(-60.0f);
+    ASSERT_TRUE(s.tick(100));
+    EXPECT_NEAR(s.positionDeg(), 0.0f, 1e-4f);
+}
+
+TEST(ServoVelocity, IgnoresSlewSpeedSetting)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setSpeed(10.0f);
+    s.setVelocity(100.0f);
+    ASSERT_TRUE(s.tick(100));
+    EXPECT_NEAR(s.positionDeg(), 10.0f, 1e-4f);
+}
+
+TEST(ServoVelocity, StopsAtSoftLimitWithoutError)
+{
+    Servo::Calibration cal;
+    cal.maxDeg = 45.0f;
+    FakeServoChannel ch;
+    Servo            s(ch, cal);
+    ASSERT_TRUE(s.engageAt(40.0f));
+    s.setVelocity(100.0f);
+    ASSERT_TRUE(s.tick(1000));
+    EXPECT_FLOAT_EQ(s.positionDeg(), 45.0f);
+    EXPECT_FALSE(s.moving());  // pinned against the limit
+    EXPECT_TRUE(s.tick(1000));
+    EXPECT_FLOAT_EQ(s.positionDeg(), 45.0f);
+
+    s.setVelocity(-10.0f);  // away from the limit moves again
+    EXPECT_TRUE(s.moving());
+}
+
+TEST(ServoVelocity, RateIsClampedToMaxSpeed)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    s.setVelocity(1000.0f);
+    EXPECT_FLOAT_EQ(s.velocity(), Servo::kMaxSpeedDegPerSec);
+    s.setVelocity(-1000.0f);
+    EXPECT_FLOAT_EQ(s.velocity(), -Servo::kMaxSpeedDegPerSec);
+}
+
+TEST(ServoVelocity, ZeroRateHolds)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(10.0f));
+    s.setVelocity(50.0f);
+    ASSERT_TRUE(s.tick(100));
+    s.setVelocity(0.0f);
+    EXPECT_FALSE(s.moving());
+    EXPECT_FALSE(s.inVelocityMode());
+    const float here = s.positionDeg();
+    ASSERT_TRUE(s.tick(1000));
+    EXPECT_FLOAT_EQ(s.positionDeg(), here);
+}
+
+TEST(ServoVelocity, SetTargetLeavesVelocityMode)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setSpeed(100.0f);
+    s.setVelocity(50.0f);
+    ASSERT_TRUE(s.tick(100));  // 5°
+    s.setTarget(-10.0f);
+    EXPECT_FALSE(s.inVelocityMode());
+    ASSERT_TRUE(s.tick(100));  // slews back at 100°/s
+    EXPECT_NEAR(s.positionDeg(), -5.0f, 1e-4f);
+}
+
+TEST(ServoVelocity, StopLeavesVelocityMode)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setVelocity(50.0f);
+    ASSERT_TRUE(s.tick(100));
+    s.stop();
+    EXPECT_FALSE(s.inVelocityMode());
+    EXPECT_FALSE(s.moving());
+}
+
+TEST(ServoVelocity, ReleaseAndReengageDoNotResumeVelocity)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setVelocity(50.0f);
+    ASSERT_TRUE(s.release());
+    EXPECT_FALSE(s.inVelocityMode());
+    ASSERT_TRUE(s.engageAt(s.positionDeg()));
+    const float here = s.positionDeg();
+    ASSERT_TRUE(s.tick(500));
+    EXPECT_FLOAT_EQ(s.positionDeg(), here);
+}
+
+TEST(ServoVelocity, BusErrorDoesNotAdvanceEstimate)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setVelocity(50.0f);
+    ch.failNext = true;
+    EXPECT_FALSE(s.tick(100));
+    EXPECT_FLOAT_EQ(s.positionDeg(), 0.0f);
+}
+
+TEST(ServoRobustness, NonFiniteInputNeverReachesTheChannel)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(std::numeric_limits<float>::quiet_NaN()));
+    EXPECT_EQ(ch.lastPulseUs, 1500);  // NaN treated as center, not UB
+    s.setTarget(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FALSE(s.moving());
+    s.setSpeed(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FLOAT_EQ(s.speed(), Servo::kDefaultSpeedDegPerSec);
+    s.setVelocity(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FALSE(s.inVelocityMode());
+    EXPECT_EQ(s.angleToPulse(std::numeric_limits<float>::infinity()), 2500);
+    EXPECT_EQ(s.angleToPulse(std::numeric_limits<float>::quiet_NaN()), 1500);
+}
+
+TEST(ServoRobustness, ReleaseStopsMotionEvenIfIdleFails)
+{
+    FakeServoChannel ch;
+    Servo            s(ch, defaultCal());
+    ASSERT_TRUE(s.engageAt(0.0f));
+    s.setVelocity(50.0f);
+    ch.failNext = true;
+    EXPECT_FALSE(s.release());
+    EXPECT_TRUE(s.engaged());  // still powered...
+    EXPECT_FALSE(s.inVelocityMode());
+    ASSERT_TRUE(s.tick(500));
+    EXPECT_FLOAT_EQ(s.positionDeg(), 0.0f);  // ...but no longer moving
 }

@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS "main.cpp"
+    INCLUDE_DIRS "."
+    REQUIRES
+        owlet_core
+        owlet_pca9685
+        owlet_esp32
+    PRIV_REQUIRES
+        esp_timer
+)

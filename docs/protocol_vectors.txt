@@ -1,0 +1,35 @@
+# owlet protocol v1 test vectors — consumed by tests/test_protocol.cpp and tools/owlet/tests.
+# Format: <expected-result> <frame>. Results: OK (valid frame), CHK (checksum mismatch), SYN (malformed).
+# Frames are listed without the trailing CRLF.
+OK  $PING*10
+OK  $ENABLE*01
+OK  $ENABLE,0,0*01
+OK  $DISABLE*54
+OK  $MOVE,30,-15*3B
+OK  $MOVE,-90,90*3C
+OK  $MOVE,12.5,-0.25*3D
+OK  $NUDGE,+1.5,-2*43
+OK  $HOME*0F
+OK  $STOP*18
+OK  $SPEED*47
+OK  $SPEED,120*58
+OK  $POS*4C
+OK  $STREAM,10*31
+OK  $LIMITS*06
+OK  $PONG,1,0.1.0*16
+OK  $ACK,MOVE*74
+OK  $NAK,MOVE,RNG*0E
+OK  $ERR,CHK*29
+OK  $POS,12.5,-3.0,30.0,-15.0,M*1F
+OK  $READY,1,0.1.0*4B
+OK  $ARRIVED,30.0,-15.0*75
+OK  $MOVE,30,-15*3b
+CHK $PING*11
+CHK $MOVE,30,-15*3A
+SYN $PING
+SYN PING*00
+SYN $PING*
+SYN $PING*0
+SYN $PING*0G
+SYN $*00
+SYN $PING*567

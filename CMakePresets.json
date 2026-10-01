@@ -1,0 +1,34 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "host-debug",
+            "displayName": "Host Debug (GTest)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/host",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "OWLET_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "host-release",
+            "inherits": "host-debug",
+            "displayName": "Host Release (GTest)",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "host-debug",   "configurePreset": "host-debug" },
+        { "name": "host-release", "configurePreset": "host-release" }
+    ],
+    "testPresets": [
+        {
+            "name": "host-debug",
+            "configurePreset": "host-debug",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

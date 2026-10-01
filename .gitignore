@@ -1,0 +1,41 @@
+# Build artifacts
+/build/
+/apps/*/build/
+/apps/*/managed_components/
+/apps/*/sdkconfig
+/apps/*/sdkconfig.old
+/apps/*/sdkconfig.local
+/apps/*/sdkconfig.defaults.local
+/apps/*/dependencies.lock
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Datasheets (fetched locally; not tracked)
+/datasheets/*.pdf
+
+# Nix
+result
+result-*
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python packaging
+*.egg-info/

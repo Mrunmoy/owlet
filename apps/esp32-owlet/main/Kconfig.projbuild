@@ -1,0 +1,83 @@
+menu "owlet configuration"
+
+    config OWLET_I2C_SDA_GPIO
+        int "I2C SDA GPIO"
+        default 1
+
+    config OWLET_I2C_SCL_GPIO
+        int "I2C SCL GPIO"
+        default 2
+
+    menu "Pan axis"
+
+        config OWLET_PAN_CHANNEL
+            int "PCA9685 channel"
+            default 0
+            range 0 15
+
+        config OWLET_PAN_PULSE_MIN_US
+            int "Pulse at -90 deg (us)"
+            default 500
+            range 400 2600
+            help
+                Set above PULSE_MAX_US to reverse the axis.
+
+        config OWLET_PAN_PULSE_CENTER_US
+            int "Pulse at 0 deg (us)"
+            default 1500
+            range 400 2600
+
+        config OWLET_PAN_PULSE_MAX_US
+            int "Pulse at +90 deg (us)"
+            default 2500
+            range 400 2600
+
+        config OWLET_PAN_LIMIT_MIN_DEG
+            int "Soft limit, low end (deg)"
+            default -90
+            range -90 0
+
+        config OWLET_PAN_LIMIT_MAX_DEG
+            int "Soft limit, high end (deg)"
+            default 90
+            range 0 90
+
+    endmenu
+
+    menu "Tilt axis"
+
+        config OWLET_TILT_CHANNEL
+            int "PCA9685 channel"
+            default 1
+            range 0 15
+
+        config OWLET_TILT_PULSE_MIN_US
+            int "Pulse at -90 deg (us)"
+            default 500
+            range 400 2600
+            help
+                Set above PULSE_MAX_US to reverse the axis.
+
+        config OWLET_TILT_PULSE_CENTER_US
+            int "Pulse at 0 deg (us)"
+            default 1500
+            range 400 2600
+
+        config OWLET_TILT_PULSE_MAX_US
+            int "Pulse at +90 deg (us)"
+            default 2500
+            range 400 2600
+
+        config OWLET_TILT_LIMIT_MIN_DEG
+            int "Soft limit, low end (deg)"
+            default -90
+            range -90 0
+
+        config OWLET_TILT_LIMIT_MAX_DEG
+            int "Soft limit, high end (deg)"
+            default 90
+            range 0 90
+
+    endmenu
+
+endmenu

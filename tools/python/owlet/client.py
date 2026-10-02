@@ -70,7 +70,7 @@ class Owlet:
                  connect: bool = True, transport=None):
         """``transport`` replaces the serial port with any object offering
         pyserial's ``read``/``write``/``reset_input_buffer``/``close``
-        (a socket bridge, a test fake, …)."""
+        (a socket bridge, a test fake, …), and optionally ``in_waiting``."""
         if transport is not None:
             self.port = port or "<transport>"
             self._serial = transport
@@ -348,7 +348,10 @@ class Owlet:
         while time.monotonic() < deadline:
             if self._pending:
                 return self._pending.popleft()
-            chunk = self._serial.read(256)
+            # pyserial's read(n) waits for all n bytes or the timeout, so asking
+            # for a fixed size would hold every short reply back by the whole
+            # timeout. Take what is already buffered (at least one byte).
+            chunk = self._serial.read(max(1, getattr(self._serial, "in_waiting", 0)))
             if not chunk:
                 continue
             self._rx += chunk

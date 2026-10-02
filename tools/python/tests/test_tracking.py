@@ -233,7 +233,7 @@ class TrackerRobustnessTest(unittest.TestCase):  # review M3, M4, L6, H2
             return default_responder(s)
         fake = FakeSerial(respond)
         head = Owlet(transport=fake)
-        tr = Tracker(head, resync_s=0.05)
+        tr = Tracker(head, resync_s=0.05, clock_samples=8)
         tr.start()
         self.assertTrue(self.wait_for(lambda: len(fake.sent("CLOCK")) >= 8 + 3, timeout=3.0))
         tr.stop()
@@ -327,6 +327,15 @@ class TrackerRobustnessTest(unittest.TestCase):  # review M3, M4, L6, H2
         tr.stop()
         with self.assertRaises(OwletError):
             tr.set_rates(1, 0)
+
+    def test_clock_jitter_must_be_sane(self):
+        head = Owlet(transport=FakeSerial())
+        with self.assertRaises(ValueError):
+            Tracker(head, clock_jitter_s=-0.001)
+        with self.assertRaises(ValueError):
+            Tracker(head, clock_jitter_s=2.0)
+        with self.assertRaises(ValueError):
+            Tracker(head, clock_window=0)
 
     def test_watchdog_cannot_be_disabled_for_tracking(self):
         with self.assertRaises(ValueError):

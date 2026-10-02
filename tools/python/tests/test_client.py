@@ -2,7 +2,9 @@
 
 import unittest
 
-from fakes import FakeSerial, default_responder
+import time
+
+from fakes import FakeSerial, NoInWaiting, default_responder
 from owlet import Owlet, OwletError
 
 
@@ -154,6 +156,26 @@ class CapabilitiesAndCalibrationTest(unittest.TestCase):
     def test_unknown_axis_is_a_value_error(self):
         with self.assertRaises(ValueError):
             self.head.calibration("roll")
+
+
+class ReadLatencyTest(unittest.TestCase):
+    """A reply must be handed over as soon as its line is complete, not when
+    the serial read times out (found on hardware: every reply took 50 ms)."""
+
+    def test_short_reply_does_not_wait_for_the_read_timeout(self):
+        head = Owlet(transport=FakeSerial(timeout=0.05))
+        rtts = []
+        for _ in range(5):
+            t0 = time.monotonic()
+            head.clock()
+            rtts.append(time.monotonic() - t0)
+        self.assertLess(min(rtts), 0.01)
+
+    def test_transport_without_in_waiting_still_works(self):
+        head = Owlet(transport=NoInWaiting(FakeSerial(timeout=0.05)))
+        t0 = time.monotonic()
+        self.assertIsInstance(head.clock(), int)
+        self.assertLess(time.monotonic() - t0, 0.01)  # read(1) returns on the first byte
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 319 automated tests: 242 C++ unit and integration tests, plus 77 Python tests, including end-to-end runs against the simulator. Every finding from an adversarial review has a regression test.
+- **Tested.** 326 automated tests: 242 C++ unit and integration tests, plus 84 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -124,7 +124,7 @@ with Owlet() as head:
 | `$VEL,<pan>,<tilt>` | Turn at signed rates (°/s). A new command replaces the old one immediately; nothing queues. |
 | Watchdog (`$WATCHDOG`) | If no `VEL` arrives within the timeout (default 500 ms), the head stops by itself and reports `$TIMEOUT,VEL`. A crashed tracker can't leave the head spinning. |
 | Timestamped `$POS` | Each streamed pose carries the device time it was computed. |
-| `Tracker` | Background reader that syncs the device clock (minimum round-trip `$CLOCK` sample, refreshed every 5 s), keeps a pose history and sends rates fire-and-forget. If the link breaks or the device reboots, `tr.failed` is set, `tr.last_error` says why, and `set_rates()` raises rather than failing silently. |
+| `Tracker` | Background reader that syncs the device clock (minimum round-trip sample of 32 randomly spaced `$CLOCK`s, refreshed every second; within ~1 ms on the reference head), keeps a pose history and sends rates fire-and-forget. If the link breaks or the device reboots, `tr.failed` is set, `tr.last_error` says why, and `set_rates()` raises rather than failing silently. |
 | `PixelController` | Pixel offset → angle (pinhole geometry) → rate (gain, deadband, rate limit). Given the pose at capture and the pose now, it subtracts the motion that happened while the detector was running. |
 
 A complete webcam + YOLO script is in [`tools/python/examples/track_object.py`](tools/python/examples/track_object.py):
@@ -535,6 +535,14 @@ build/host/tests/owlet_servo_test --gtest_filter='Servo.Slew*'
 cd tools/python && python -m unittest tests.test_protocol
 ```
 
+On a connected head (this **moves the servos**, within ±20° of centre at ≤ 20 °/s, and leaves them limp):
+
+```bash
+cd tools/python/tests && OWLET_HW=1 python -m unittest test_hardware -v    # OWLET_PORT=... to pick the port
+```
+
+It checks what the simulator can't: request round trip and `$POS` freshness on a real USB link, clock-offset precision, velocity mode at the commanded rate, the watchdog trip, and a continuous `Tracker` run. Normal test runs skip it.
+
 > Nix flakes only see files that git knows about. If you add a file and the build can't find it, run `git add` on it first.
 
 **Without Nix:** `apps/esp32-owlet` is a standard ESP-IDF v5.5 project, so with ESP-IDF installed natively, `cd apps/esp32-owlet && idf.py build flash` should work. This path isn't regularly tested. The host tests only need CMake, Ninja and a C++17 compiler (GoogleTest is downloaded automatically).
@@ -578,7 +586,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 
 ## Project status and roadmap
 
-**v0.3.0, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. Motion, directions and ranges have been verified on the reference head. Velocity mode and the watchdog are verified in the simulator but not yet on hardware.
+**v0.3.0 firmware, v0.3.1 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. Motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` have been verified on the reference head.
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection
@@ -587,7 +595,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 - [x] Pluggable protocol architecture (`IProtocol`, `ProtocolMux`)
 - [x] Tracking support: velocity mode, watchdog, timestamped pose, clock sync, `Tracker`, `PixelController`
 - [x] On-device calibration and capabilities (`$CAL`, `$CAPS`)
-- [ ] Verify velocity mode and watchdog on hardware
+- [x] Verify velocity mode, watchdog, clock sync and `Tracker` on hardware
 - [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))
 - [ ] Verify the client on Windows and macOS

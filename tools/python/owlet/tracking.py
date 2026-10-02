@@ -21,6 +21,7 @@ If the loop stalls, the device's watchdog stops the head on its own.
 from __future__ import annotations
 
 import math
+import random
 import threading
 import time
 from collections import deque
@@ -216,15 +217,35 @@ class Tracker:
     """
 
     def __init__(self, head: Owlet, stream_hz: int = 50, watchdog_ms: int = 300,
-                 history: int = 256, clock_samples: int = 8, resync_s: float = 5.0):
+                 history: int = 256, clock_samples: int = 32, resync_s: float = 1.0,
+                 clock_window: int = 32, clock_jitter_s: float = 0.012):
+        """Clock defaults (measured on the reference head, 2026-10-02): one
+        round trip lands anywhere in the device's 10 ms loop, so it takes ~32
+        samples to be sure of a short one (8 left the offset up to 4 ms off).
+        The offset comes from the best of the last ``clock_window`` samples,
+        and the crystals drift ~13 ppm apart, so the window must stay short:
+        32 samples × 1 s resync ≈ 0.4 ms of drift at most.
+
+        ``clock_jitter_s`` delays each clock sample by a random 0…that many
+        seconds. The device serves input once per control loop (10 ms on
+        owlet), so samples sent straight after a reply, or straight after a
+        streamed $POS, all land just after a loop tick: every round trip is
+        then a whole loop long and the offset is biased by about half of it.
+        Random phases let the lowest-round-trip sample be a short one. Keep it
+        a little over the device's loop period."""
         if not 50 <= watchdog_ms <= 5000:
             raise ValueError("watchdog_ms must be 50–5000: tracking always needs the watchdog")
+        if not 0.0 <= clock_jitter_s <= 1.0:
+            raise ValueError("clock_jitter_s must be 0–1 s")
+        if clock_window < 1:
+            raise ValueError("clock_window must be at least 1")
         self._head = head
         self._stream_hz = stream_hz
         self._watchdog_ms = watchdog_ms
         self._clock_samples = clock_samples
         self._resync_s = resync_s
-        self.clock = DeviceClock()
+        self._clock_jitter_s = clock_jitter_s
+        self.clock = DeviceClock(window=clock_window)
         self.history = PoseHistory(history)
         self.latest: Position | None = None
         self.timeouts = 0
@@ -257,7 +278,8 @@ class Tracker:
             self.last_error = None
             self._last_ext_ms = None
             self._clock_t0 = None
-            self.clock.sync(self._head.clock, self._clock_samples)
+            self.clock.sync(self._head.clock, self._clock_samples,
+                            before_each=self._clock_jitter)
             self._head.watchdog(self._watchdog_ms)
             # Clamp to what *this* head reports, not to an assumed constant.
             self._max_rate = min(_MAX_RATE, self._head.caps().velocity_max)
@@ -316,6 +338,10 @@ class Tracker:
         """Interpolated head pose at a ``time.monotonic()`` timestamp."""
         return self.history.at(host_time)
 
+    def _clock_jitter(self) -> None:
+        if self._clock_jitter_s > 0.0:
+            time.sleep(random.uniform(0.0, self._clock_jitter_s))
+
     # ── reader thread ──────────────────────────────────────────────────────
 
     def _fail(self, message: str, code: str | None) -> None:
@@ -334,6 +360,9 @@ class Tracker:
                     self.clock_misses += 1
                     self._next_resync = now + self._resync_s
                 if self._clock_t0 is None and now >= self._next_resync:
+                    # This loop wakes on each streamed $POS, i.e. just after a
+                    # device loop tick: send at a random phase instead.
+                    self._clock_jitter()
                     with self._lock:
                         if not self._running:
                             break

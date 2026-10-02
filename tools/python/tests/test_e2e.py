@@ -5,6 +5,7 @@ Override the binary path with OWLET_SIM=/path/to/owlet_sim.
 """
 
 import os
+import statistics
 import subprocess
 import time
 import sys
@@ -155,6 +156,62 @@ class EndToEndTest(unittest.TestCase):
             time.sleep(0.5)
             self.assertEqual(tr.timeouts, 1)
             self.assertEqual(tr.latest.state, "H")
+
+    # ── Timing and accuracy (P13: found on hardware, invisible to loose bounds) ──
+    # The sim serves input every 10 ms, like the firmware, and stamps with
+    # CLOCK_MONOTONIC, the clock behind time.monotonic(). So latency has a
+    # known floor and the clock offset has a known true value.
+
+    @staticmethod
+    def _true_clock_offset_s() -> float:
+        # Device ms = host monotonic ms truncated to 32 bits, so the offset is
+        # the wrapped-away part plus, on average, half a millisecond.
+        now_ms = time.monotonic() * 1000.0
+        return (now_ms - now_ms % 2**32) / 1000.0 + 0.0005
+
+    def test_request_round_trip_is_bounded_by_the_device_loop(self):
+        rtts = []
+        for _ in range(20):
+            t0 = time.monotonic()
+            self.head.clock()
+            rtts.append(time.monotonic() - t0)
+        # One 10 ms loop at most, plus scheduling. A client that waits out its
+        # 50 ms serial read timeout fails this.
+        self.assertLess(statistics.median(rtts), 0.015)
+
+    def test_streamed_positions_arrive_fresh_and_on_time(self):
+        self.head.enable()
+        with Tracker(self.head, stream_hz=50, watchdog_ms=300) as tr:
+            time.sleep(0.3)
+            ages = []
+            true_offset = self._true_clock_offset_s()
+            for i in range(40):
+                tr.set_rates(0, 0)
+                # Age against the sim's true clock, not the estimated one: an
+                # offset error would otherwise hide (or fake) late delivery.
+                ages.append(time.monotonic() - (tr.latest.t_ms / 1000.0 + true_offset))
+                time.sleep(0.011 + 0.003 * (i % 3))  # don't phase-lock to the stream
+            ts = [t for t, _, _ in list(tr.history._samples)[-40:]]
+        # 50 Hz stream: the newest sample is at most one interval (20 ms) old.
+        self.assertLess(statistics.median(ages), 0.02)
+        interval = statistics.median(b - a for a, b in zip(ts, ts[1:]))
+        self.assertAlmostEqual(interval, 0.02, delta=0.004)
+
+    def test_tracker_clock_offset_is_accurate_from_the_start(self):
+        with Tracker(self.head, stream_hz=50) as tr:
+            err = tr.clock.offset_s - self._true_clock_offset_s()
+        # Back-to-back samples phase-lock to the 10 ms loop and bias this by ~4.5 ms.
+        self.assertLess(abs(err), 0.0015, f"offset error {err * 1000:+.2f} ms")
+
+    def test_tracker_clock_resync_stays_accurate(self):
+        # One initial sample, then enough resyncs to fill the window: the
+        # result comes from resync samples alone.
+        with Tracker(self.head, stream_hz=50, clock_samples=1, resync_s=0.05) as tr:
+            time.sleep(3.0)  # > 32 resyncs (the default window) at ~70 ms each
+            err = tr.clock.offset_s - self._true_clock_offset_s()
+            misses = tr.clock_misses
+        self.assertEqual(misses, 0)
+        self.assertLess(abs(err), 0.0015, f"offset error {err * 1000:+.2f} ms")
 
     def test_capabilities_are_reported(self):
         c = self.head.caps()

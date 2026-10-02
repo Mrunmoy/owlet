@@ -8,4 +8,4 @@ __all__ = [
     "AxisCalibration", "Capabilities", "DeviceClock", "Owlet", "OwletError", "PixelController", "Pose", "PoseHistory",
     "Position", "ProtocolError", "Tracker", "decode", "encode", "find_ports",
 ]
-__version__ = "0.3.0"
+__version__ = "0.3.1"

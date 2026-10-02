@@ -253,6 +253,8 @@ $POS,<pan>,<tilt>,<target_pan>,<target_tilt>,<state>,<ms>
 
 **Latency compensation.** A tracking loop needs to know where the camera pointed *when a frame was captured*, not when the detection finished. The client estimates the device-to-host clock offset with `$CLOCK` round trips (taking the minimum-RTT sample), stamps every streamed `$POS` with the host time, and interpolates the pose at any host timestamp (§7).
 
+The device serves input once per control loop (10 ms), so a round trip can take anything from under 1 ms to a whole loop, and the minimum-RTT sample is only accurate if some samples are short. Samples sent straight after a reply or a streamed `$POS` all land just after a loop tick and are all ~10 ms long, which biases the offset by about half a loop (measured: 4.5 ms). The client therefore delays each sample by a random 0–12 ms, takes 32 of them at start-up, and keeps the best of the last 32 one-per-second resyncs. The window is kept short because the host and device crystals drift apart (13 ppm on the reference head, about 0.4 ms over the 32 s window). The client also reads whatever bytes are already buffered rather than a fixed count, because a serial `read(n)` waits for all `n` bytes or its timeout.
+
 Unsolicited messages (device → PC):
 
 | Message                 | When |

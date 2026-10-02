@@ -12,9 +12,15 @@ def frame(body: str) -> bytes:
 
 
 class FakeSerial:
-    """Answers requests through `responder(sentence) -> [reply bodies]`."""
+    """Answers requests through `responder(sentence) -> [reply bodies]`.
 
-    def __init__(self, responder=None):
+    Reads behave like pyserial's: ``read(n)`` blocks until ``n`` bytes are
+    buffered or ``timeout`` passes, and ``in_waiting`` counts buffered bytes.
+    A fake that returns early hid a 50 ms latency bug from every test (P13).
+    """
+
+    def __init__(self, responder=None, timeout: float = 0.05):
+        self.timeout = timeout
         self.rx = bytearray()
         self.written: list[str] = []
         self.responder = responder or default_responder
@@ -30,15 +36,22 @@ class FakeSerial:
             self.inject(body)
         return len(data)
 
-    def read(self, n: int) -> bytes:
-        if self.read_error is not None:
-            raise self.read_error
+    @property
+    def in_waiting(self) -> int:
         with self._lock:
-            chunk = bytes(self.rx[:n])
-            del self.rx[:n]
-        if not chunk:
-            time.sleep(0.002)
-        return chunk
+            return len(self.rx)
+
+    def read(self, n: int) -> bytes:
+        deadline = time.monotonic() + self.timeout
+        while True:
+            if self.read_error is not None:
+                raise self.read_error
+            with self._lock:
+                if len(self.rx) >= n or time.monotonic() >= deadline:
+                    chunk = bytes(self.rx[:n])
+                    del self.rx[:n]
+                    return chunk
+            time.sleep(0.0005)
 
     def reset_input_buffer(self) -> None:
         with self._lock:
@@ -75,3 +88,23 @@ def default_responder(s):
             return ["WATCHDOG,500"]
         return [f"ACK,{s.name}"]
     return ["ERR,UNK"]
+
+
+class NoInWaiting:
+    """A transport offering only the required pyserial surface (no
+    ``in_waiting``), such as a socket bridge."""
+
+    def __init__(self, inner: FakeSerial):
+        self._inner = inner
+
+    def read(self, n: int) -> bytes:
+        return self._inner.read(n)
+
+    def write(self, data: bytes) -> int:
+        return self._inner.write(data)
+
+    def reset_input_buffer(self) -> None:
+        self._inner.reset_input_buffer()
+
+    def close(self) -> None:
+        self._inner.close()

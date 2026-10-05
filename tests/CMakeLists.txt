@@ -44,6 +44,6 @@ if(Python3_FOUND AND TARGET owlet_sim)
     )
     set_tests_properties(python_client PROPERTIES
         ENVIRONMENT "OWLET_SIM=$<TARGET_FILE:owlet_sim>"
-        TIMEOUT 60
+        TIMEOUT 180
     )
 endif()

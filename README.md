@@ -64,7 +64,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 374 automated tests: 288 C++ unit and integration tests, plus 86 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
+- **Tested.** 390 automated tests: 288 C++ unit and integration tests, plus 102 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -231,52 +231,34 @@ flowchart LR
 
 ## Quick start
 
-### 1. Flash the firmware
-
-You need [Nix](https://nixos.org/download) with [flakes enabled](https://nixos.wiki/wiki/Flakes). It provides ESP-IDF, the compilers and Python, so nothing else needs to be installed.
+You need [Nix](https://nixos.org/download) with [flakes enabled](https://nixos.wiki/wiki/Flakes). It supplies every tool at a pinned version, so nothing else needs installing.
 
 ```bash
-git clone https://github.com/Mrunmoy/owlet.git
-cd owlet
-nix develop                 # first run downloads the toolchain; later runs are instant
-./build.py --esp --flash    # build and flash; the board's port is detected automatically
+git clone https://github.com/Mrunmoy/owlet.git && cd owlet
+nix develop                        # all tools; first run downloads them
+sudo tools/dev/install-udev.sh     # Linux, once: USB access without sudo
+tools/dev/doctor.sh                # is this machine ready?
+./build.py --host -t               # build and run every test on the PC
+./build.py --pico --flash          # stepper head   (or: ./build.py --esp --flash  for the servo head)
+owlet ping                         # owlet 0.4.0 (protocol v3) on /dev/ttyACM0
+owlet selftest                     # exercise both motors and report
 ```
 
-With more than one Espressif board connected, pass the port: `./build.py --esp --flash /dev/ttyACM1`.
+That is the whole path from a clone to a tested head. **[`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)** goes through it step by step: what each command does, how to try everything with no hardware, and what to do when a step fails.
 
-For the **stepper head**, build and load the Pico firmware instead:
+A few things worth knowing straight away:
 
-```bash
-./build.py --pico --flash   # plug the Pico in and run; no button needed
-```
-
-The script finds the board and asks whatever is running on it to reboot into the bootloader: owlet itself (and anything else built on the pico-sdk USB console) obeys, and so does MicroPython. A blank Pico is already in its bootloader. Only a board running firmware that ignores every request needs `BOOTSEL` held while plugging in, once. Add `--wait 60` to have the script wait for the board to be plugged in. You can also drag `apps/pico-owlet/build/pico_owlet.uf2` onto the `RPI-RP2` drive.
-
-On Linux, picotool needs permission to talk to the board without `sudo`: a udev rule granting access to USB IDs `2e8a:0003` and `2e8a:000a`.
-
-### 2. The PC client
-
-**In `nix develop`: nothing to install.** The shell already puts the `owlet` command on your `PATH` (it runs the checkout's `tools/bin/owlet`). Don't `pip install` inside the Nix shell: its Python lives in the read-only Nix store, so pip fails with *Permission denied*.
-
-**Not using Nix?** Any machine with Python 3.9+ (Linux, macOS or Windows):
+- **Flashing the Pico needs no button.** The script asks the running firmware to reboot into its bootloader. Only a board running firmware that ignores the request needs `BOOTSEL` held while plugging in, once.
+- **The motors boot limp**, so `owlet enable` is always the first step. See [Safety](#safety).
+- **The stepper head has no position sensor yet.** Centre it by hand before enabling: wherever it is then becomes 0, 0. `owlet enable 20 0` instead tells it "you are at pan 20 right now"; a stepper never jumps on enable.
+- **`owlet` is already on your `PATH` inside `nix develop`.** Don't `pip install` there: Nix's Python is read-only. Outside Nix, any machine with Python 3.9+ can use the client with `pip install ./tools/python`.
 
 ```bash
-pip install ./tools/python
-```
-
-### 3. Say hello
-
-```bash
-owlet ping                  # owlet 0.4.0 (protocol v3) on /dev/ttyACM1
-owlet enable                # servos energise at center (0, 0)
-owlet move 20 0 --wait      # base turns 20° and the command waits until it's there
+owlet enable                # motors energise and hold
+owlet move 20 0 --wait      # pan 20° to the camera's right, and wait until it is there
 owlet pos                   # where is it?
-owlet disable               # servos go limp
+owlet disable               # motors go limp
 ```
-
-The motors boot **limp**, so `enable` is always the first step. See [Safety](#safety).
-
-On the stepper head there is no position sensor, so `enable` cannot know where the head is. Point it straight ahead by hand first, then `owlet enable`: that spot becomes (0, 0), and the soft limits are measured from it. `owlet enable 20 0` instead tells it "you are at pan 20 right now"; a stepper never jumps on enable.
 
 ## Usage
 
@@ -303,6 +285,8 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 | `owlet watchdog [MS]` | Get or set the velocity watchdog (0 = off, 50–5000 ms) |
 | `owlet clock` | Device clock in ms |
 | `owlet caps` | What the head can do: speed, velocity, watchdog and stream ranges |
+| `owlet diag` | What the motor drivers report: current, load, faults (stepper head) |
+| `owlet selftest [-y]` | Exercise both motors inside the head's own limits and print a pass/fail report. Asks before moving; `-y` skips the questions |
 | `owlet cal [pan\|tilt]` | Show the calibration stored on the device |
 | `owlet cal pan --limits -85 90` | Change soft limits (works while enabled) |
 | `owlet cal tilt --reverse` | Flip an axis's direction (servos must be disabled) |
@@ -311,7 +295,33 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 | `owlet watch [--hz N]` | Live position stream until Ctrl-C |
 | `owlet shell` | Interactive prompt: type `move 30 -15`, `speed 45`, `pos`, … |
 
-The port is auto-detected by Espressif's USB vendor ID. Use `-p /dev/ttyACM1`, `-p COM5`, etc. to choose one explicitly.
+The port is auto-detected by USB vendor ID (Espressif for the servo head, Raspberry Pi for the stepper head). Use `-p /dev/ttyACM1`, `-p COM5`, etc. to choose one explicitly.
+
+#### Self-test
+
+`owlet selftest` is the quickest way to know a head is healthy after building, rewiring or reflashing it. It reads the head's limits and top speed and scales itself from them, so it suits either head and the simulator:
+
+```console
+$ owlet selftest
+  PASS  link: owlet 0.4.0, protocol v3, on /dev/ttyACM0
+  PASS  ranges: pan -90..90, tilt -60..60 deg; speed up to 240 deg/s
+  PASS  drivers at rest: pan: 458 mA; tilt: 458 mA
+
+The head will now move: pan up to ±45 and tilt up to ±30 degrees, at up to 240 deg/s. Is it centred and clear to move? [y/N] y
+  PASS  enable: state H after enable
+  PASS  pan sweep at 60 deg/s: legs 0.85 s, 1.61 s, 0.86 s; load 28..66, median 58
+  …
+  PASS  velocity mode and watchdog: ran at 20 deg/s and stopped itself after 300 ms (6.9 deg)
+  PASS  soft limit: a move to 95 deg was refused
+  PASS  return home: reports 0, 0 and is on its marks
+  SKIP  home switches: none fitted: zero is the pose at enable, so lost steps can only be seen by eye
+  PASS  disable: motors off
+self-test passed: 12 passed, 0 failed, 0 warnings, 1 skipped
+```
+
+It sweeps each axis at three speeds, then both together, checks that velocity mode stops by itself when commands stop, that a move past a soft limit is refused, and that the drivers report no faults. The head is left disabled whatever happens, and the exit code is non-zero if anything failed. `--span` and `--speeds` set how far and how fast as fractions of the head's own limits; `--axis` picks one axis.
+
+Without home switches the head cannot measure where it is, so the last question, whether it is back on its centre marks, is the only check for lost steps.
 
 ### Python library
 

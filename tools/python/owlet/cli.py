@@ -116,6 +116,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("clock", help="print the device clock (ms since boot)")
     sub.add_parser("caps", help="print the head's capabilities")
     sub.add_parser("diag", help="print what the motor drivers report: faults, load, current")
+    st = sub.add_parser("selftest", help="exercise the motors inside the head's limits and report")
+    st.add_argument("-y", "--yes", action="store_true",
+                    help="don't ask before moving or for a visual check at the end")
+    st.add_argument("--span", type=float, default=0.5, metavar="FRACTION",
+                    help="how far to travel, as a fraction of each soft limit (default 0.5)")
+    st.add_argument("--speeds", type=float, nargs="+", default=[0.25, 0.5, 1.0], metavar="FRACTION",
+                    help="speeds to sweep at, as fractions of the head's top speed")
+    st.add_argument("--axis", choices=["pan", "tilt", "both"], default="both")
     cal = sub.add_parser("cal", help="show or change the calibration stored on the device")
     cal.add_argument("target", nargs="?", choices=["pan", "tilt", "save", "reset"],
                      help="axis to show/change, or save/reset (default: show both axes)")
@@ -131,6 +139,24 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--hz", type=int, default=10)
     sub.add_parser("shell", help="interactive prompt")
     return p
+
+
+def _selftest(head: Owlet, args) -> int:
+    from .selftest import SelfTest, format_check, summary
+
+    def ask(question: str) -> bool:
+        return input(f"\n{question} [y/N] ").strip().lower() in ("y", "yes")
+
+    axes = ("pan", "tilt") if args.axis == "both" else (args.axis,)
+    try:
+        test = SelfTest(head, span=args.span, speeds=args.speeds, axes=axes,
+                        ask=None if args.yes else ask,
+                        report=lambda c: print(format_check(c), flush=True))
+    except ValueError as e:
+        print(f"owlet: {e}", file=sys.stderr)
+        return 2
+    print(summary(test.run()))
+    return 0 if test.passed else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -192,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
                     faults = ", ".join(d.fault_names) or "none"
                     print(f"{axis:5s} current {d.current_ma} mA   load {d.load}   "
                           f"{'STALLED' if d.stalled else 'not stalled'}   faults: {faults}")
+            elif args.cmd == "selftest":
+                return _selftest(head, args)
             elif args.cmd == "cal":
                 return _cal(head, args)
             elif args.cmd == "watch":

@@ -36,6 +36,15 @@ public:
         target = position;
         velocity = 0.0f;
     }
+    void halt() override
+    {
+        stop();
+        ++halts;
+    }
+    [[nodiscard]] bool blocked() const override
+    {
+        return isBlocked;
+    }
     void setVelocity(float degPerSec) override
     {
         velocity = degPerSec;
@@ -97,6 +106,8 @@ public:
     float target{0.0f};
     float velocity{0.0f};
     float slew{10.0f};
+    bool isBlocked{false};
+    int halts{0};
     float lo{-90.0f};
     float hi{90.0f};
     int ticks{0};

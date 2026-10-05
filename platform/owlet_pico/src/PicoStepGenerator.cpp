@@ -124,7 +124,7 @@ bool PicoStepGenerator::emit(int32_t steps, uint32_t durationUs)
         return true;
     }
     const PIO pio = m_program.pio();
-    if (!m_ready || pio_sm_get_tx_fifo_level(pio, m_sm) != 0)
+    if (!m_ready || m_halted || pio_sm_get_tx_fifo_level(pio, m_sm) != 0)
     {
         return false;
     }
@@ -145,6 +145,35 @@ bool PicoStepGenerator::emit(int32_t steps, uint32_t durationUs)
     pio_sm_put(pio, m_sm, delay);
     pio_sm_put(pio, m_sm, ((count - 1u) << 1) | (forward ? 1u : 0u));
     return true;
+}
+
+void PicoStepGenerator::halt()
+{
+    // The flag first: the loop must not queue a burst behind a machine that
+    // is about to stop.
+    m_halted = true;
+    if (m_ready)
+    {
+        pio_sm_set_enabled(m_program.pio(), m_sm, false);
+    }
+}
+
+void PicoStepGenerator::resume()
+{
+    if (!m_ready)
+    {
+        m_halted = false;
+        return;
+    }
+    const PIO pio = m_program.pio();
+    pio_sm_set_enabled(pio, m_sm, false);
+    pio_sm_clear_fifos(pio, m_sm);
+    pio_sm_restart(pio, m_sm);
+    // The machine may have been frozen with STEP high.
+    pio_sm_exec(pio, m_sm, pio_encode_set(pio_pins, 0));
+    pio_sm_exec(pio, m_sm, pio_encode_jmp(m_program.offset()));
+    pio_sm_set_enabled(pio, m_sm, true);
+    m_halted = false;
 }
 
 } // namespace owlet::platform::pico

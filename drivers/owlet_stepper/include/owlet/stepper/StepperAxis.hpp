@@ -2,6 +2,7 @@
 
 #include "owlet/hal/IAxis.hpp"
 #include "owlet/hal/IAxisCalibration.hpp"
+#include "owlet/hal/IDigitalInput.hpp"
 #include "owlet/hal/IDigitalOutput.hpp"
 #include "owlet/hal/IStepGenerator.hpp"
 
@@ -41,6 +42,13 @@ public:
         float travelMaxDeg = +170.0f;
     };
 
+    /// Switches at the ends of travel. Either may be absent.
+    struct LimitSwitches
+    {
+        const ::owlet::hal::IDigitalInput* min = nullptr; ///< pressed at the negative end
+        const ::owlet::hal::IDigitalInput* max = nullptr; ///< pressed at the positive end
+    };
+
     static constexpr float kMinSpeedDegPerSec = 1.0f;
     static constexpr float kDefaultSpeedDegPerSec = 90.0f;
     // Slack for "inside the limits": one reporting step (0.1°).
@@ -54,9 +62,16 @@ public:
     // degree always fits the 32-bit step count.
     static constexpr float kMaxTravelDeg = 3600.0f;
 
+    /// @param limits Switches the axis must never step into. While one is
+    ///               pressed, steps toward it are withheld and the axis
+    ///               stops dead; steps away from it are unaffected.
     StepperAxis(::owlet::hal::IStepGenerator& steps,
                 ::owlet::hal::IDigitalOutput& enable,
                 const Config& config);
+    StepperAxis(::owlet::hal::IStepGenerator& steps,
+                ::owlet::hal::IDigitalOutput& enable,
+                const Config& config,
+                LimitSwitches limits);
 
     StepperAxis(const StepperAxis&) = delete;
     StepperAxis& operator=(const StepperAxis&) = delete;
@@ -72,6 +87,7 @@ public:
     // Brakes at the configured acceleration; the target becomes the point
     // where the axis will come to rest.
     void stop() override;
+    void halt() override;
     void setVelocity(float degPerSec) override;
     void setSpeed(float degPerSec) override;
     // A burst the generator can't take yet is not lost: the profile simply
@@ -146,6 +162,14 @@ public:
         return m_positionSteps;
     }
 
+    /// True from the moment steps are withheld because a limit switch in
+    /// the direction of travel is pressed, or the step generator was halted
+    /// from outside, until the axis next takes a step or is engaged again.
+    [[nodiscard]] bool blocked() const override
+    {
+        return m_blocked;
+    }
+
 private:
     [[nodiscard]] float toDeg(int32_t steps) const
     {
@@ -159,6 +183,7 @@ private:
     ::owlet::hal::IStepGenerator& m_steps;
     ::owlet::hal::IDigitalOutput& m_enable;
     Config m_cfg;
+    LimitSwitches m_limits;
     float m_minDeg{0.0f};
     float m_maxDeg{0.0f};
     int32_t m_minSteps{0};
@@ -172,6 +197,7 @@ private:
     uint32_t m_refusedMs{0}; // how long the generator has refused bursts
     bool m_engaged{false};
     bool m_velocityMode{false};
+    bool m_blocked{false};
 };
 
 } // namespace owlet

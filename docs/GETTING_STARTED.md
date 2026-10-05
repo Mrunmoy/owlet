@@ -112,7 +112,7 @@ Both end by telling you the serial port the head is on. The first build of eithe
 The motors are **off** after power-up or flashing. Nothing moves until you enable them.
 
 ```bash
-owlet ping          # owlet 0.4.0 (protocol v3) on /dev/ttyACM0
+owlet ping          # owlet 0.5.0 (protocol v3) on /dev/ttyACM0
 owlet caps          # what this head can do
 owlet limits        # how far each axis may travel
 ```

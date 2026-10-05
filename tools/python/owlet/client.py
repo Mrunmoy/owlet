@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
@@ -16,17 +17,22 @@ from .protocol import (
     decode,
     Diagnostics,
     encode,
+    HeadEvent,
     parse_calibration,
     parse_caps,
     parse_diag,
+    parse_event,
     parse_position,
+    parse_trouble,
     Position,
     PROTOCOL_VERSION,
     ProtocolError,
     Sentence,
+    Trouble,
 )
 
 _AXES = ("pan", "tilt")
+_log = logging.getLogger("owlet")
 
 
 def _axis(name: str) -> str:
@@ -61,6 +67,36 @@ def find_ports() -> list[str]:
     return sorted(p.device for p in list_ports.comports() if p.vid in OWLET_VIDS)
 
 
+class Signal:
+    """Functions to call when something happens.
+
+    >>> head.limit_hit.connect(lambda axis, end: print(axis, "hit", end))
+
+    A handler that raises is logged and does not stop the others.
+    """
+
+    def __init__(self, on_connect: Callable[[], None] | None = None):
+        self._handlers: list[Callable[..., None]] = []
+        self._on_connect = on_connect
+
+    def connect(self, handler: Callable[..., None]) -> Callable[..., None]:
+        """Call ``handler`` on every emission. Returns it, so this works as a decorator."""
+        self._handlers.append(handler)
+        if self._on_connect is not None:
+            self._on_connect()
+        return handler
+
+    def disconnect(self, handler: Callable[..., None]) -> None:
+        self._handlers.remove(handler)
+
+    def emit(self, *args) -> None:
+        for handler in list(self._handlers):
+            try:
+                handler(*args)
+            except Exception:  # noqa: BLE001 - one bad handler must not break the link
+                _log.exception("owlet event handler failed")
+
+
 class Owlet:
     """Talk to an owlet head.
 
@@ -68,13 +104,34 @@ class Owlet:
     ...     head.enable()
     ...     head.move(30, -15, wait=True)
     ...     print(head.position())
+
+    The head also reports things by itself. Connect a function to hear them:
+
+    >>> head.limit_hit.connect(lambda axis, end: print(axis, "hit its", end, "switch"))
+    >>> head.arrived.connect(lambda pan, tilt: print("there:", pan, tilt))
+
+    Signals: ``arrived(pan, tilt)``, ``watchdog_expired()``, ``bus_fault()``,
+    ``bus_ok()``, ``limit_hit(axis, end)``, ``stalled(axis)``,
+    ``fault_changed(axis, faults)``, ``driver_online(axis)``,
+    ``driver_offline(axis)``, ``position_lost(axis)``, ``homed()``,
+    ``homing_failed(axis, code)``, ``events_lost(count)``, and ``event(HeadEvent)``
+    for every ``$EVT`` line whatever its kind.
+
+    Connecting the first handler starts a background reader, so handlers
+    run without your program asking. They run on that reader's thread, or
+    on yours when the line arrives during one of your own calls. With
+    ``dispatch="manual"`` no thread is started: handlers run only during
+    your calls and ``process_events()``.
     """
 
     def __init__(self, port: str | None = None, timeout: float = 1.0,
-                 connect: bool = True, transport=None):
+                 connect: bool = True, transport=None, dispatch: str = "auto"):
         """``transport`` replaces the serial port with any object offering
         pyserial's ``read``/``write``/``reset_input_buffer``/``close``
         (a socket bridge, a test fake, …), and optionally ``in_waiting``."""
+        if dispatch not in ("auto", "manual"):
+            raise ValueError("dispatch must be 'auto' or 'manual'")
+        self._dispatch = dispatch
         if transport is not None:
             self.port = port or "<transport>"
             self._serial = transport
@@ -98,6 +155,30 @@ class Owlet:
         self._rx = b""
         self._pending: deque[Sentence] = deque()
         self.on_event: Callable[[Sentence], None] | None = None
+        # One reader at a time: a request holds this from its write to its
+        # reply, so the background reader can never take that reply.
+        self._io = threading.RLock()
+        self._closing = threading.Event()
+        self._listener: threading.Thread | None = None
+        self._listener_holds = 0  # readers that need every line themselves (a Tracker)
+        self._arrivals = 0
+        self._homings = 0          # homing outcomes seen
+        self._homing_failure: tuple[str | None, str] | None = None
+        start = self._start_listener
+        self.arrived = Signal(start)
+        self.watchdog_expired = Signal(start)
+        self.bus_fault = Signal(start)
+        self.bus_ok = Signal(start)
+        self.limit_hit = Signal(start)
+        self.stalled = Signal(start)
+        self.fault_changed = Signal(start)
+        self.driver_online = Signal(start)
+        self.driver_offline = Signal(start)
+        self.position_lost = Signal(start)
+        self.homed = Signal(start)
+        self.homing_failed = Signal(start)
+        self.events_lost = Signal(start)
+        self.event = Signal(start)
         self.protocol_version: int | None = None
         self.firmware_version: str | None = None
         if connect:
@@ -106,6 +187,10 @@ class Owlet:
     # ── lifecycle ─────────────────────────────────────────────────────────
 
     def close(self) -> None:
+        self._closing.set()
+        listener = self._listener
+        if listener is not None and listener is not threading.current_thread():
+            listener.join(timeout=1.0)
         self._serial.close()
 
     def __enter__(self) -> "Owlet":
@@ -149,20 +234,46 @@ class Owlet:
 
     def move(self, pan: float, tilt: float, wait: bool = False,
              timeout: float | None = None) -> Position | None:
-        self._ack("MOVE", pan, tilt)
-        return self.wait_arrived(timeout) if wait else None
+        return self._move("MOVE", (pan, tilt), wait, timeout)
 
     def nudge(self, dpan: float, dtilt: float, wait: bool = False,
               timeout: float | None = None) -> Position | None:
-        self._ack("NUDGE", dpan, dtilt)
-        return self.wait_arrived(timeout) if wait else None
+        return self._move("NUDGE", (dpan, dtilt), wait, timeout)
 
     def home(self, wait: bool = False, timeout: float | None = None) -> Position | None:
-        self._ack("HOME")
-        return self.wait_arrived(timeout) if wait else None
+        return self._move("HOME", (), wait, timeout)
+
+    def _move(self, name: str, args: tuple, wait: bool, timeout: float | None) -> Position | None:
+        with self._io:
+            before = self._arrivals  # an arrival may come in with the reply itself
+            self._ack(name, *args)
+            return self.wait_arrived(timeout, _since=before) if wait else None
 
     def stop(self) -> None:
         self._ack("STOP")
+
+    def seek_home(self, wait: bool = False, timeout: float = 180.0) -> None:
+        """Find the reference position from the limit switches. The head
+        moves by itself. Refused with code ``UNS`` on a head without switches.
+
+        With ``wait`` it returns once the head is homed, and raises if homing
+        failed. Without, connect to ``homed`` and ``homing_failed``.
+        """
+        with self._io:
+            before = self._homings
+            self._ack("SEEK")
+            if not wait:
+                return
+            deadline = time.monotonic() + timeout
+            while self._homings == before:
+                s = self._next_sentence(deadline)
+                if s is None:
+                    raise OwletError("timed out waiting for homing to finish")
+                if s.name != "EVT":
+                    self._dispatch_event(s)
+            if self._homing_failure is not None:
+                axis, code = self._homing_failure
+                raise OwletError(f"homing failed on {axis} (reason {code})", "HOMEFAIL")
 
     def speed(self, deg_per_sec: float | None = None) -> float:
         if deg_per_sec is None:
@@ -271,16 +382,101 @@ class Owlet:
         finally:
             self.stream(0)
 
-    def wait_arrived(self, timeout: float | None = None) -> Position:
+    def wait_arrived(self, timeout: float | None = None, _since: int | None = None) -> Position:
         """Block until the device reports $ARRIVED; returns the final position."""
         deadline = time.monotonic() + (timeout if timeout is not None else 30.0)
-        while True:
-            s = self._next_sentence(deadline)
-            if s is None:
-                raise OwletError("timed out waiting for ARRIVED")
-            if s.name == "ARRIVED":
-                return self.position()
-            self._dispatch_event(s)
+        with self._io:
+            since = self._arrivals if _since is None else _since
+            while self._arrivals == since:
+                s = self._next_sentence(deadline)
+                if s is None:
+                    raise OwletError("timed out waiting for ARRIVED")
+                if s.name != "ARRIVED":
+                    self._dispatch_event(s)
+            return self.position()
+
+    def events(self, enabled: bool) -> None:
+        """Turn the head's ``$EVT`` lines on or off (they are on at power-up)."""
+        self._ack("EVENTS", 1 if enabled else 0)
+
+    def stats(self) -> dict[str, int]:
+        """The head's health counters: events ``posted`` and ``dropped``, the
+        event queue's ``high_water`` mark, control-loop passes that ran
+        ``late``, and the longest gap between two passes, ``worst_ms``."""
+        f = [int(x) for x in self.request("STAT", expect="STAT").fields]
+        f += [0] * (5 - len(f))  # firmware 0.5.0 development builds sent three
+        return {"posted": f[0], "dropped": f[1], "high_water": f[2], "late": f[3], "worst_ms": f[4]}
+
+    def trouble_codes(self) -> list[Trouble]:
+        """Everything that has gone wrong since power-up (or the last clear),
+        one entry per kind of trouble per axis, oldest first."""
+        with self._io:
+            count = int(self.request("DTC", expect="DTC").fields[0])
+            return [parse_trouble(self.request("DTC", i, expect="DTC")) for i in range(count)]
+
+    def clear_trouble_codes(self) -> None:
+        self._ack("DTC", "CLEAR")
+
+    def process_events(self, timeout: float = 0.0) -> int:
+        """Read what the head has sent and run the handlers for it.
+
+        Returns the number of lines handled. Only needed with
+        ``dispatch="manual"``; otherwise the background reader does this.
+        """
+        deadline = time.monotonic() + timeout
+        handled = 0
+        with self._io:
+            while True:
+                if not self._pending and not self._input_waiting() and time.monotonic() >= deadline:
+                    return handled
+                s = self._next_sentence(max(deadline, time.monotonic() + 0.001))
+                if s is None:
+                    return handled
+                self._handle_unsolicited(s)
+                handled += 1
+
+    # ── background reader ─────────────────────────────────────────────────
+
+    def hold_listener(self) -> None:
+        """Keep the background reader off the port, for a reader that needs
+        every line itself. Pair with ``release_listener()``."""
+        with self._outstanding_lock:
+            self._listener_holds += 1
+
+    def release_listener(self) -> None:
+        with self._outstanding_lock:
+            self._listener_holds = max(0, self._listener_holds - 1)
+
+    def _start_listener(self) -> None:
+        if self._dispatch != "auto" or self._listener is not None or self._closing.is_set():
+            return
+        self._listener = threading.Thread(target=self._listen, name="owlet-events", daemon=True)
+        self._listener.start()
+
+    def _input_waiting(self) -> bool:
+        # A transport that cannot say is assumed to have something.
+        return bool(getattr(self._serial, "in_waiting", 1))
+
+    def _listen(self) -> None:
+        while not self._closing.is_set():
+            try:
+                idle = self._listener_holds > 0 or not (self._pending or self._input_waiting())
+                if idle:
+                    self._closing.wait(0.005)
+                    continue
+                with self._io:
+                    s = self._next_sentence(time.monotonic() + 0.02)
+                    if s is not None:
+                        self._handle_unsolicited(s)
+            except Exception:  # noqa: BLE001 - the port went away; requests will report it
+                if not self._closing.is_set():
+                    _log.exception("owlet event reader stopped")
+                return
+
+    def _handle_unsolicited(self, s: Sentence) -> None:
+        if is_reply(s):
+            self.take_outstanding()  # a late answer to an earlier send()
+        self._dispatch_event(s)
 
     # ── low level ─────────────────────────────────────────────────────────
 
@@ -330,6 +526,10 @@ class Owlet:
         reply matched to this request. Unsolicited lines (POS stream,
         ARRIVED, TIMEOUT, ERR,BUS, READY) also go to ``on_event``.
         """
+        with self._io:
+            return self._request(name, fields, expect)
+
+    def _request(self, name: str, fields: tuple, expect: str) -> Sentence:
         self._serial.write(encode(name, *fields))
         deadline = time.monotonic() + self.timeout
         while True:
@@ -358,7 +558,48 @@ class Owlet:
         if self.on_event is not None:
             self.on_event(s)
 
+    def _emit(self, s: Sentence) -> None:
+        """Run the handlers for a line the head sent by itself. Every line
+        read passes through here exactly once, whoever is reading."""
+        try:
+            if s.name == "ARRIVED":
+                self._arrivals += 1
+                self.arrived.emit(float(s.fields[0]), float(s.fields[1]))
+            elif s.name == "TIMEOUT":
+                self.watchdog_expired.emit()
+            elif s.name == "ERR" and s.fields[:1] == ("BUS",):
+                self.bus_fault.emit()
+            elif s.name == "EVT":
+                e: HeadEvent = parse_event(s)
+                self.event.emit(e)
+                if e.name in ("HOMED", "HOMEFAIL"):
+                    self._homing_failure = None if e.name == "HOMED" else (e.axis, e.arg)
+                    self._homings += 1
+                signal, args = {
+                    "BUSOK": (self.bus_ok, ()),
+                    "LIMIT": (self.limit_hit, (e.axis, e.arg.lower())),
+                    "STALL": (self.stalled, (e.axis,)),
+                    "FAULT": (self.fault_changed, (e.axis, int(e.arg) if e.arg.isdigit() else 0)),
+                    "ONLINE": (self.driver_online, (e.axis,)),
+                    "OFFLINE": (self.driver_offline, (e.axis,)),
+                    "LOST": (self.position_lost, (e.axis,)),
+                    "HOMED": (self.homed, ()),
+                    "HOMEFAIL": (self.homing_failed, (e.axis, e.arg)),
+                    "OVERFLOW": (self.events_lost, (int(e.arg) if e.arg.isdigit() else 0,)),
+                }.get(e.name, (None, ()))
+                if signal is not None:
+                    signal.emit(*args)
+        except (ProtocolError, ValueError, IndexError):
+            pass  # a malformed line is not worth breaking the link for
+
     def _next_sentence(self, deadline: float) -> Sentence | None:
+        with self._io:
+            s = self._read_sentence(deadline)
+            if s is not None:
+                self._emit(s)
+            return s
+
+    def _read_sentence(self, deadline: float) -> Sentence | None:
         while time.monotonic() < deadline:
             if self._pending:
                 return self._pending.popleft()

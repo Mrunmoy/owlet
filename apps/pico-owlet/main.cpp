@@ -9,17 +9,24 @@
 // Wiring: docs/wiring/pico-tmc2209/.
 
 #include "owlet/core/ActivityIndicator.hpp"
+#include "owlet/core/AxisEventRelay.hpp"
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/EventBus.hpp"
+#include "owlet/core/HeadHoming.hpp"
+#include "owlet/core/LimitTrip.hpp"
 #include "owlet/core/HeadDiagnostics.hpp"
 #include "owlet/core/Heartbeat.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Poller.hpp"
+#include "owlet/core/TroubleLog.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/platform/pico/PicoClock.hpp"
+#include "owlet/platform/pico/PicoDigitalInput.hpp"
 #include "owlet/platform/pico/PicoDigitalOutput.hpp"
 #include "owlet/platform/pico/PicoFlashCalibrationStore.hpp"
 #include "owlet/platform/pico/PicoHalfDuplexUart.hpp"
+#include "owlet/platform/pico/PicoInterruptLock.hpp"
 #include "owlet/platform/pico/PicoStepGenerator.hpp"
 #include "owlet/platform/pico/PicoUsbSerial.hpp"
 #include "owlet/stepper/SharedEnable.hpp"
@@ -41,9 +48,11 @@ namespace
 using ::owlet::SharedEnable;
 using ::owlet::StepperAxis;
 using ::owlet::platform::pico::PicoClock;
+using ::owlet::platform::pico::PicoDigitalInput;
 using ::owlet::platform::pico::PicoDigitalOutput;
 using ::owlet::platform::pico::PicoFlashCalibrationStore;
 using ::owlet::platform::pico::PicoHalfDuplexUart;
+using ::owlet::platform::pico::PicoInterruptLock;
 using ::owlet::platform::pico::PicoStepGenerator;
 using ::owlet::platform::pico::PicoStepProgram;
 using ::owlet::platform::pico::PicoUsbSerial;
@@ -66,6 +75,23 @@ constexpr unsigned kTiltUartTxPin = 0; // UART0
 constexpr unsigned kTiltUartRxPin = 1;
 constexpr unsigned kHeartbeatLedPin = PICO_DEFAULT_LED_PIN; // the LED on the board
 constexpr unsigned kActivityLedPin = 22;                    // sinks the LED: low = lit
+
+// ── Limit switches ──────────────────────────────────────────────────────────
+// Two per axis, one at each end of travel. Set kLimitSwitchesFitted once
+// they are wired (docs/wiring/pico-tmc2209); until then none of these pins is
+// touched and the head behaves exactly as it did without them.
+//
+// Wire each switch normally-closed between its pin and ground. The pin's
+// pull-up then reads "pressed" when the switch opens, and also when a wire
+// breaks or a plug comes out, so a wiring fault stops the axis.
+
+constexpr bool kLimitSwitchesFitted = false;
+constexpr unsigned kPanMinSwitchPin = 10;
+constexpr unsigned kPanMaxSwitchPin = 11;
+constexpr unsigned kTiltMinSwitchPin = 14;
+constexpr unsigned kTiltMaxSwitchPin = 15;
+constexpr PicoDigitalInput::Polarity kSwitchPolarity = PicoDigitalInput::Polarity::ActiveHigh;
+constexpr PicoDigitalInput::Pull kSwitchPull = PicoDigitalInput::Pull::Up;
 
 // ── Mechanism ───────────────────────────────────────────────────────────────
 
@@ -132,6 +158,10 @@ constexpr StepperAxis::Config kTiltAxis = makeAxis(kTiltReversed, 60.0f, 90.0f);
 // 500 Hz: each tick hands the PIO one 2 ms burst per axis.
 constexpr uint32_t kLoopPeriodUs = 2000;
 
+// Events waiting between two loop passes, and the listeners they go to.
+constexpr std::size_t kEventQueueDepth = 16;
+constexpr std::size_t kEventListeners = 2;
+
 } // namespace
 
 int main()
@@ -162,9 +192,51 @@ int main()
     static SharedEnable enable(enableLine);
     static SharedEnable::User panEnable(enable);
     static SharedEnable::User tiltEnable(enable);
-    static StepperAxis pan(panSteps, panEnable, kPanAxis);
-    static StepperAxis tilt(tiltSteps, tiltEnable, kTiltAxis);
-    static ::owlet::core::PanTilt head(pan, tilt);
+    // Whatever notices a change posts it here; listeners are attached below,
+    // in the order they should hear.
+    static PicoClock clock;
+    static PicoInterruptLock eventLock;
+    static ::owlet::core::StaticEventBus<kEventQueueDepth, kEventListeners> events(eventLock, clock);
+
+    StepperAxis::LimitSwitches panLimits;
+    StepperAxis::LimitSwitches tiltLimits;
+    if (kLimitSwitchesFitted)
+    {
+        static PicoDigitalInput panMin(kPanMinSwitchPin, kSwitchPolarity, kSwitchPull);
+        static PicoDigitalInput panMax(kPanMaxSwitchPin, kSwitchPolarity, kSwitchPull);
+        static PicoDigitalInput tiltMin(kTiltMinSwitchPin, kSwitchPolarity, kSwitchPull);
+        static PicoDigitalInput tiltMax(kTiltMaxSwitchPin, kSwitchPolarity, kSwitchPull);
+        panLimits = StepperAxis::LimitSwitches{&panMin, &panMax};
+        tiltLimits = StepperAxis::LimitSwitches{&tiltMin, &tiltMax};
+
+        // A switch closing cuts that axis's pulses from its interrupt.
+        using ::owlet::core::LimitEnd;
+        using ::owlet::core::LimitTrip;
+        static LimitTrip panMinTrip(panSteps, events, 0, LimitEnd::Min);
+        static LimitTrip panMaxTrip(panSteps, events, 0, LimitEnd::Max);
+        static LimitTrip tiltMinTrip(tiltSteps, events, 1, LimitEnd::Min);
+        static LimitTrip tiltMaxTrip(tiltSteps, events, 1, LimitEnd::Max);
+        panMin.onActive(panMinTrip);
+        panMax.onActive(panMaxTrip);
+        tiltMin.onActive(tiltMinTrip);
+        tiltMax.onActive(tiltMaxTrip);
+    }
+    static StepperAxis pan(panSteps, panEnable, kPanAxis, panLimits);
+    static StepperAxis tilt(tiltSteps, tiltEnable, kTiltAxis, tiltLimits);
+
+    ::owlet::core::IHoming* homing = nullptr;
+    if (kLimitSwitchesFitted)
+    {
+        using ::owlet::core::AxisHoming;
+        static AxisHoming panHoming(pan, pan, *panLimits.min, panLimits.max, AxisHoming::Config{});
+        static AxisHoming tiltHoming(tilt, tilt, *tiltLimits.min, tiltLimits.max, AxisHoming::Config{});
+        static ::owlet::core::HeadHoming headHoming(panHoming, tiltHoming);
+        homing = &headHoming;
+    }
+    static ::owlet::core::LoopStats loopStats;
+    static ::owlet::core::TroubleLog trouble;
+    (void)events.attach(trouble);
+    static ::owlet::core::PanTilt head(pan, tilt, &events, homing);
 
     static PicoFlashCalibrationStore calStore;
     static ::owlet::core::Calibrator calibrator(
@@ -183,21 +255,24 @@ int main()
     (void)tiltLink.init();
     static ::owlet::Tmc2209 panDriver(panLink, kDriver);
     static ::owlet::Tmc2209 tiltDriver(tiltLink, kDriver);
-    static ::owlet::Tmc2209Monitor panMonitor(panDriver);
-    static ::owlet::Tmc2209Monitor tiltMonitor(tiltDriver,
-                                               ::owlet::Tmc2209Monitor::kPollPeriodMs / 2);
+    static ::owlet::core::AxisEventRelay panDriverEvents(0, events);
+    static ::owlet::core::AxisEventRelay tiltDriverEvents(1, events);
+    static ::owlet::Tmc2209Monitor panMonitor(panDriver, 0, &panDriverEvents);
+    static ::owlet::Tmc2209Monitor tiltMonitor(
+        tiltDriver, ::owlet::Tmc2209Monitor::kPollPeriodMs / 2, &tiltDriverEvents);
     static ::owlet::core::HeadDiagnostics diagnostics(&panMonitor, &tiltMonitor);
     static ::owlet::core::Heartbeat heartbeat(heartbeatLed);
 
     // Protocols are plug-ins: to add your own, construct it here and combine
     // them with core::ProtocolMux (docs/DESIGN.md §4.4).
-    static PicoClock clock;
     static ::owlet::text::TextProtocol protocol(
-        usb, head, calibrator, clock, ::owlet::core::kFirmwareVersion, &diagnostics);
+        usb, head, calibrator, clock, ::owlet::core::kFirmwareVersion, &diagnostics, &events, &trouble, &loopStats);
+    (void)events.attach(protocol);
     static ::owlet::core::ActivityIndicator indicator(head, head, activityLed);
     static ::owlet::core::Poller<3> motion(indicator, {&panMonitor, &tiltMonitor, &heartbeat});
-    static ::owlet::core::ControlLoop loop(usb, motion, protocol);
+    static ::owlet::core::ControlLoop loop(usb, motion, protocol, &events);
 
+    loop.watchTiming(loopStats, kLoopPeriodUs / 1000u);
     loop.begin(clock.nowMs());
     absolute_time_t wake = get_absolute_time();
     for (;;)

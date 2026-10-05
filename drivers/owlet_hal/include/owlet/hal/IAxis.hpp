@@ -47,6 +47,11 @@ public:
     // Come to rest and hold. Leaves velocity mode.
     virtual void stop() = 0;
 
+    /// Stops where it is, at once, with no braking distance. For when going
+    /// any further would do harm; an axis that cannot stop more sharply
+    /// than stop() does the same as stop(). Leaves velocity mode.
+    virtual void halt() = 0;
+
     // Velocity mode at a signed rate (clamped to ±velocityMax). Zero is the
     // same as stop().
     virtual void setVelocity(float degPerSec) = 0;
@@ -70,6 +75,12 @@ public:
     [[nodiscard]] virtual float maxDeg() const = 0;
     // False if the shaft may be outside the limits, or its angle is unknown.
     [[nodiscard]] virtual bool positionInLimits() const = 0;
+    /// @return true if motion was cut short by something physical (a limit
+    ///         switch, or pulses stopped from outside), so the axis is not
+    ///         where a completed move would have put it. Stays true until
+    ///         the axis next moves or is engaged afresh. An axis that cannot
+    ///         tell returns false.
+    [[nodiscard]] virtual bool blocked() const = 0;
     [[nodiscard]] virtual Capabilities capabilities() const = 0;
 };
 

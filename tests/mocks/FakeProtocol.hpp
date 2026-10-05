@@ -46,10 +46,9 @@ public:
         beginAt.push_back(nowMs);
     }
 
-    void onTick(uint32_t nowMs, const ::owlet::core::TickStatus& status) override
+    void onTick(uint32_t nowMs) override
     {
         tickAt.push_back(nowMs);
-        statuses.push_back(status);
         if (log != nullptr)
         {
             log->push_back("onTick");
@@ -60,7 +59,7 @@ public:
     std::string                           current;
     std::vector<uint32_t>                 beginAt;
     std::vector<uint32_t>                 tickAt;
-    std::vector<::owlet::core::TickStatus> statuses;
+    
     std::vector<std::string>*             log{nullptr};
     std::size_t                           maxPerCall{0};  // 0 = unlimited
     int                                   consumeCalls{0};

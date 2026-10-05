@@ -8,7 +8,7 @@
 
 using ::owlet::core::ConsumeResult;
 using ::owlet::core::ProtocolMux;
-using ::owlet::core::TickStatus;
+
 using ::owlet::test::FakeProtocol;
 
 namespace
@@ -47,7 +47,7 @@ public:
         return {len, false};
     }
     void begin(uint32_t) override {}
-    void onTick(uint32_t, const TickStatus&) override {}
+    void onTick(uint32_t) override {}
 
     std::vector<uint8_t> current;
     int                  frames{0};
@@ -74,7 +74,7 @@ public:
         return {len, false};
     }
     void begin(uint32_t) override {}
-    void onTick(uint32_t, const TickStatus&) override {}
+    void onTick(uint32_t) override {}
 };
 
 // Claims everything and never consumes: must not hang the mux.
@@ -84,7 +84,7 @@ public:
     [[nodiscard]] bool claims(uint8_t, bool) const override { return true; }
     [[nodiscard]] ConsumeResult consume(const uint8_t*, std::size_t) override { return {0, true}; }
     void begin(uint32_t) override {}
-    void onTick(uint32_t, const TickStatus&) override {}
+    void onTick(uint32_t) override {}
 };
 
 } // namespace
@@ -169,13 +169,10 @@ TEST(ProtocolMux, BeginAndTickFanOutToAll)
     FakeProtocol   b('#', true);
     ProtocolMux<2> mux({&a, &b});
     mux.begin(5);
-    TickStatus st;
-    st.busOk = false;
-    mux.onTick(7, st);
+    mux.onTick(7);
     EXPECT_EQ(a.beginAt, std::vector<uint32_t>{5});
     EXPECT_EQ(b.beginAt, std::vector<uint32_t>{5});
-    ASSERT_EQ(b.statuses.size(), 1u);
-    EXPECT_FALSE(b.statuses[0].busOk);
+    EXPECT_EQ(b.tickAt, std::vector<uint32_t>{7});
     EXPECT_EQ(a.tickAt, std::vector<uint32_t>{7});
 }
 

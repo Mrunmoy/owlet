@@ -1,3 +1,4 @@
+#include "FakeClock.hpp"
 #include "FakeProtocol.hpp"
 #include "FakeSerialPort.hpp"
 #include "owlet/core/ControlLoop.hpp"
@@ -44,7 +45,7 @@ public:
         return {len, false};
     }
     void begin(uint32_t) override {}
-    void onTick(uint32_t, const TickStatus&) override { log->push_back("onTick"); }
+    void onTick(uint32_t) override { log->push_back("onTick"); }
 
     std::vector<std::string>* log{nullptr};
     std::string               received;
@@ -117,17 +118,44 @@ TEST(ControlLoop, SurvivesMillisWraparound)
     EXPECT_EQ(ticker.dts, std::vector<uint32_t>{0x15u});
 }
 
-TEST(ControlLoop, PassesTickStatusToProtocol)
+TEST(ControlLoop, DeliversEventsAfterMotionAndBeforeTheProtocolsTick)
 {
+    // A ticker that announces something, as the motion layer does.
+    class AnnouncingTicker final : public ::owlet::core::ITickable
+    {
+    public:
+        [[nodiscard]] TickStatus tick(uint32_t) override
+        {
+            log->push_back("tick");
+            (void) events->post(::owlet::core::EventId::Arrived, ::owlet::core::Event::kHead, 0);
+            return {};
+        }
+        ::owlet::core::IEventSink* events{nullptr};
+        std::vector<std::string>*  log{nullptr};
+    };
+    class LoggingObserver final : public ::owlet::core::IEventObserver
+    {
+    public:
+        void onEvent(const ::owlet::core::Event&) override { log->push_back("event"); }
+        std::vector<std::string>* log{nullptr};
+    };
+    std::vector<std::string>            log;
+    ::owlet::hal::NullInterruptLock     lock;
+    ::owlet::test::FakeClock            clock;
+    LoggingObserver                     observer;
+    observer.log = &log;
+    ::owlet::core::StaticEventBus<4, 1> bus(lock, clock, {&observer});
+    AnnouncingTicker                    ticker;
+    ticker.events = &bus;
+    ticker.log    = &log;
+    LoggingProtocol proto;
+    proto.log = &log;
     FakeSerialPort port;
-    FakeTicker     ticker;
-    FakeProtocol   proto('$', true);
-    ControlLoop    loop(port, ticker, proto);
+    ControlLoop    loop(port, ticker, proto, &bus);
     loop.begin(0);
-    ticker.next.busOk = false;
+    port.rx = "x";
     loop.service(10);
-    ASSERT_EQ(proto.statuses.size(), 1u);
-    EXPECT_FALSE(proto.statuses[0].busOk);
+    EXPECT_EQ(log, (std::vector<std::string>{"tick", "event", "onTick", "consume"}));
 }
 
 TEST(ControlLoop, TicksMotionBeforeReadingInput)
@@ -170,4 +198,23 @@ TEST(ControlLoop, RetriesPartialConsumeWithoutLosingBytes)
     port.rx = "$ABCDEFGH\n";
     loop.service(10);
     EXPECT_EQ(proto.frames, std::vector<std::string>{"$ABCDEFGH\n"});
+}
+
+TEST(ControlLoop, RecordsLatePassesAndTheLongestGap)
+{
+    FakeSerialPort            port;
+    FakeTicker                ticker;
+    FakeProtocol              proto('$', true);
+    ControlLoop               loop(port, ticker, proto);
+    ::owlet::core::LoopStats  stats;
+    loop.watchTiming(stats, 2);
+    loop.begin(100);
+    loop.service(102);  // on time
+    loop.service(105);  // one count over: within the clock's resolution
+    EXPECT_EQ(stats.lateTicks, 0u);
+    loop.service(109);  // 4 ms: late
+    loop.service(111);
+    loop.service(171);  // a flash write, say
+    EXPECT_EQ(stats.lateTicks, 2u);
+    EXPECT_EQ(stats.worstTickMs, 60u);
 }

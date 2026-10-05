@@ -51,17 +51,22 @@ struct Rig
     FakeServoChannel tiltCh;
     Servo            pan{panCh, Servo::Calibration{}};
     Servo            tilt{tiltCh, Servo::Calibration{}};
-    PanTilt          head{pan, tilt};
-    FakeSerialPort   port;
     FakeClock        clock{1000};
     uint32_t&        now = clock.t;
+    ::owlet::hal::NullInterruptLock      lock;
+    ::owlet::core::StaticEventBus<16, 2> bus{lock, clock};
+    ::owlet::core::TroubleLog            trouble;
+    PanTilt          head{pan, tilt, &bus};
+    FakeSerialPort   port;
     ::owlet::test::FakeCalibrationStore store;
     ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
-    TextProtocol     proto{port, head, calib, clock, "0.1.0"};
-    ControlLoop      proc{port, head, proto};
+    TextProtocol     proto{port, head, calib, clock, "0.1.0", nullptr, &bus, &trouble};
+    ControlLoop      proc{port, head, proto, &bus};
 
     Rig()
     {
+        EXPECT_TRUE(bus.attach(trouble));
+        EXPECT_TRUE(bus.attach(proto));
         calib.begin();
         proc.begin(now);
         (void) port.takeLines();
@@ -249,7 +254,8 @@ TEST(TextProtocol, SlewBusFailureReportsErrBusOnceUntilRecovered)
     r.panCh.failNext = true;
     EXPECT_EQ(r.advance(10), std::vector<std::string>{line("ERR,BUS")});
     const std::vector<std::string> rest = r.advance(1000);
-    EXPECT_EQ(rest, std::vector<std::string>{line("ARRIVED,10.0,0.0")});
+    EXPECT_EQ(rest, (std::vector<std::string>{line("EVT,BUSOK,-,0"), line("ARRIVED,10.0,0.0")}))
+        << "the recovery is announced once, then the move finishes";
 }
 
 TEST(TextProtocol, LargeTimeGapIsCappedSoHeadDoesNotJump)
@@ -564,4 +570,152 @@ TEST(TextDiagnostics, NeedsExactlyOneAxis)
     EXPECT_EQ(r.send("DIAG"), std::vector<std::string>{line("NAK,DIAG,FMT")});
     EXPECT_EQ(r.send("DIAG,ROLL"), std::vector<std::string>{line("NAK,DIAG,FMT")});
     EXPECT_EQ(r.send("DIAG,PAN,1"), std::vector<std::string>{line("NAK,DIAG,FMT")});
+}
+
+// ── Events on the wire ──────────────────────────────────────────────────────
+
+namespace
+{
+
+using ::owlet::core::Event;
+using ::owlet::core::EventId;
+
+// Posts one event and returns what the protocol wrote for it.
+std::vector<std::string> announce(Rig& r, EventId id, uint8_t axis, uint16_t arg)
+{
+    (void) r.bus.post(id, axis, arg);
+    return r.advance(10);
+}
+
+} // namespace
+
+TEST(TextEvents, EachKindOfEventHasItsLine)
+{
+    Rig r;
+    using V = std::vector<std::string>;
+    EXPECT_EQ(announce(r, EventId::LimitHit, 0, 1), V{line("EVT,LIMIT,PAN,MAX")});
+    EXPECT_EQ(announce(r, EventId::LimitHit, 1, 0), V{line("EVT,LIMIT,TILT,MIN")});
+    EXPECT_EQ(announce(r, EventId::Stalled, 1, 0), V{line("EVT,STALL,TILT,0")});
+    EXPECT_EQ(announce(r, EventId::DriverFaultChanged, 0, 6), V{line("EVT,FAULT,PAN,6")});
+    EXPECT_EQ(announce(r, EventId::DriverOnline, 0, 0), V{line("EVT,ONLINE,PAN,0")});
+    EXPECT_EQ(announce(r, EventId::DriverOffline, 1, 0), V{line("EVT,OFFLINE,TILT,0")});
+    EXPECT_EQ(announce(r, EventId::PositionLost, 0, 0), V{line("EVT,LOST,PAN,0")});
+    EXPECT_EQ(announce(r, EventId::Homed, Event::kHead, 0), V{line("EVT,HOMED,-,0")});
+    EXPECT_EQ(announce(r, EventId::HomingFailed, 1, 2), V{line("EVT,HOMEFAIL,TILT,2")});
+    EXPECT_EQ(announce(r, EventId::BusOk, Event::kHead, 0), V{line("EVT,BUSOK,-,0")});
+}
+
+TEST(TextEvents, TheOlderLinesAreNotRepeatedAsEvt)
+{
+    Rig r;
+    using V = std::vector<std::string>;
+    EXPECT_EQ(announce(r, EventId::WatchdogExpired, Event::kHead, 0), V{line("TIMEOUT,VEL")});
+    EXPECT_EQ(announce(r, EventId::BusFault, Event::kHead, 0), V{line("ERR,BUS")});
+    EXPECT_TRUE(announce(r, EventId::Arrived, Event::kHead, 0).empty()) << "nobody on this link asked for a move";
+}
+
+TEST(TextEvents, CanBeTurnedOffAndOnAgain)
+{
+    Rig r;
+    using V = std::vector<std::string>;
+    EXPECT_EQ(r.send("EVENTS,0"), V{line("ACK,EVENTS")});
+    EXPECT_TRUE(announce(r, EventId::Stalled, 0, 0).empty());
+    EXPECT_EQ(announce(r, EventId::WatchdogExpired, Event::kHead, 0), V{line("TIMEOUT,VEL")})
+        << "the lines clients already rely on are not affected";
+    EXPECT_EQ(r.send("EVENTS,1"), V{line("ACK,EVENTS")});
+    EXPECT_EQ(announce(r, EventId::Stalled, 0, 0), V{line("EVT,STALL,PAN,0")});
+    EXPECT_EQ(r.send("EVENTS,2"), V{line("NAK,EVENTS,RNG")});
+    EXPECT_EQ(r.send("EVENTS"), V{line("NAK,EVENTS,FMT")});
+}
+
+TEST(TextEvents, ALostEventIsReportedWithTheCount)
+{
+    Rig r;
+    for (int i = 0; i < 20; ++i)  // more than the queue of 16 holds
+    {
+        (void) r.bus.post(EventId::DriverOnline, 0, 0);
+    }
+    const std::vector<std::string> lines = r.advance(10);
+    ASSERT_EQ(lines.size(), 17u);
+    EXPECT_EQ(lines.back(), line("EVT,OVERFLOW,-,4"));
+}
+
+TEST(TextEvents, StatReportsTheQueueCounters)
+{
+    Rig r;
+    EXPECT_EQ(r.send("STAT"), std::vector<std::string>{line("STAT,0,0,0,0,0")});
+    (void) announce(r, EventId::Stalled, 0, 0);
+    (void) r.bus.post(EventId::DriverOnline, 0, 0);
+    (void) r.bus.post(EventId::DriverOnline, 1, 0);
+    (void) r.advance(10);
+    EXPECT_EQ(r.send("STAT"), std::vector<std::string>{line("STAT,3,0,2,0,0")});
+}
+
+// ── Trouble codes ───────────────────────────────────────────────────────────
+
+TEST(TextTrouble, NothingRecordedAtPowerUp)
+{
+    Rig r;
+    EXPECT_EQ(r.send("DTC"), std::vector<std::string>{line("DTC,0")});
+    EXPECT_EQ(r.send("DTC,0"), std::vector<std::string>{line("NAK,DTC,RNG")});
+}
+
+TEST(TextTrouble, ListsWhatWentWrongWithCountsAndTimes)
+{
+    Rig r;  // the rig's clock starts at 1000 ms
+    (void) announce(r, EventId::DriverFaultChanged, 1, 6);
+    (void) r.advance(500);
+    (void) announce(r, EventId::DriverFaultChanged, 1, 2);
+    (void) announce(r, EventId::LimitHit, 0, 1);
+    EXPECT_EQ(r.send("DTC"), std::vector<std::string>{line("DTC,2")});
+    EXPECT_EQ(r.send("DTC,0"), std::vector<std::string>{line("DTC,0,21,TILT,2,2,1000,1510")});
+    EXPECT_EQ(r.send("DTC,1"), std::vector<std::string>{line("DTC,1,30,PAN,1,1,1520,1520")});
+    EXPECT_EQ(r.send("DTC,2"), std::vector<std::string>{line("NAK,DTC,RNG")});
+}
+
+TEST(TextTrouble, RecordsTheHeadsOwnTroubleToo)
+{
+    Rig r;
+    (void) r.send("ENABLE");
+    (void) r.send("VEL,10,0");
+    (void) r.advance(600);  // no further command: the watchdog stops it
+    EXPECT_EQ(r.send("DTC"), std::vector<std::string>{line("DTC,1")});
+    const std::vector<std::string> record = r.send("DTC,0");
+    ASSERT_EQ(record.size(), 1u);
+    EXPECT_EQ(record[0].rfind("$DTC,0,11,-,1,0,", 0), 0u) << record[0];
+}
+
+TEST(TextTrouble, ClearEmptiesTheList)
+{
+    Rig r;
+    (void) announce(r, EventId::Stalled, 0, 0);
+    EXPECT_EQ(r.send("DTC,CLEAR"), std::vector<std::string>{line("ACK,DTC")});
+    EXPECT_EQ(r.send("DTC"), std::vector<std::string>{line("DTC,0")});
+}
+
+TEST(TextTrouble, MalformedRequestsAreRefused)
+{
+    Rig r;
+    EXPECT_EQ(r.send("DTC,WIPE"), std::vector<std::string>{line("NAK,DTC,FMT")});
+    EXPECT_EQ(r.send("DTC,0,1"), std::vector<std::string>{line("NAK,DTC,FMT")});
+}
+
+// ── Homing and a lost position on the wire ──────────────────────────────────
+
+TEST(TextHoming, AHeadWithoutSwitchesSaysItCannotSeek)
+{
+    Rig r;
+    EXPECT_EQ(r.send("SEEK"), std::vector<std::string>{line("NAK,SEEK,UNS")});
+    EXPECT_EQ(r.send("SEEK,1"), std::vector<std::string>{line("NAK,SEEK,FMT")});
+}
+
+TEST(TextCalibrationSave, IsRefusedWhileTheHeadIsMoving)
+{
+    Rig r;
+    (void) r.send("ENABLE");
+    (void) r.send("MOVE,40,0");
+    (void) r.advance(20);
+    EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("NAK,CAL,MOV")});
+    (void) r.advance(3000);
+    EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("ACK,CAL")});
 }

@@ -101,11 +101,11 @@ public:
         }
     }
 
-    void onTick(uint32_t nowMs, const TickStatus& status) override
+    void onTick(uint32_t nowMs) override
     {
         for (IProtocol* p : m_protocols)
         {
-            p->onTick(nowMs, status);
+            p->onTick(nowMs);
         }
     }
 

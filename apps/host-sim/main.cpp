@@ -11,6 +11,8 @@
 #include "owlet/core/CalibrationCodec.hpp"
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/EventBus.hpp"
+#include "owlet/core/TroubleLog.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/hal/IClock.hpp"
@@ -203,7 +205,12 @@ int main(int argc, char** argv)
     ::owlet::PCA9685::Channel tiltCh = pwm.channel(1);
     ::owlet::Servo            pan(panCh, ::owlet::Servo::Calibration{});
     ::owlet::Servo            tilt(tiltCh, ::owlet::Servo::Calibration{});
-    ::owlet::core::PanTilt    head(pan, tilt);
+    SteadyClock                          clock;
+    ::owlet::hal::NullInterruptLock      eventLock;  // one thread, no interrupts
+    ::owlet::core::StaticEventBus<16, 2> events(eventLock, clock);
+    ::owlet::core::TroubleLog            trouble;
+    (void) events.attach(trouble);
+    ::owlet::core::PanTilt               head(pan, tilt, &events);
 
     PtySerialPort port;
     if (!port.open())
@@ -223,15 +230,15 @@ int main(int argc, char** argv)
     std::printf("%s\n", link.empty() ? port.slavePath() : link.c_str());
     std::fflush(stdout);
 
-    SteadyClock                 clock;
     FileCalibrationStore      store(calFile);
     ::owlet::core::Calibrator calibrator(
         pan, tilt, head, store,
         ::owlet::core::CalibrationRecord{::owlet::Servo::toAxisCalibration({}), ::owlet::Servo::toAxisCalibration({})});
     calibrator.begin();
     ::owlet::text::TextProtocol protocol(port, head, calibrator, clock,
-                                         ::owlet::core::kFirmwareVersion);
-    ::owlet::core::ControlLoop  loop(port, head, protocol);
+                                         ::owlet::core::kFirmwareVersion, nullptr, &events, &trouble);
+    (void) events.attach(protocol);
+    ::owlet::core::ControlLoop  loop(port, head, protocol, &events);
     loop.begin(clock.nowMs());
     while (g_stop == 0)
     {

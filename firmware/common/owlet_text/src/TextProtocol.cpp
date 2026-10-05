@@ -9,20 +9,25 @@ namespace owlet::text
 
 using ::owlet::core::ConsumeResult;
 using ::owlet::core::IPanTilt;
-using ::owlet::core::TickStatus;
 
 TextProtocol::TextProtocol(::owlet::hal::IByteSink&     out,
                            IPanTilt&                    head,
                            ::owlet::core::ICalibration& calibration,
                            const ::owlet::hal::IClock&  clock,
                            std::string_view             firmwareVersion,
-                           const ::owlet::core::IDiagnostics* diagnostics)
+                           const ::owlet::core::IDiagnostics* diagnostics,
+                           const ::owlet::core::EventBus*     events,
+                           ::owlet::core::TroubleLog*         trouble,
+                           const ::owlet::core::LoopStats*    loop)
     : m_out(out),
       m_head(head),
       m_calibration(calibration),
       m_clock(clock),
       m_firmwareVersion(firmwareVersion),
-      m_diagnostics(diagnostics)
+      m_diagnostics(diagnostics),
+      m_events(events),
+      m_trouble(trouble),
+      m_loop(loop)
 {
 }
 
@@ -79,32 +84,128 @@ void TextProtocol::begin(uint32_t nowMs)
     sendVersioned("READY");
 }
 
-void TextProtocol::onTick(uint32_t nowMs, const TickStatus& status)
+void TextProtocol::onEvent(const ::owlet::core::Event& event)
 {
-    m_nowMs = nowMs;
-
-    if (!status.busOk && !m_busFault)
+    using ::owlet::core::EventId;
+    switch (event.id)
     {
+    case EventId::BusFault:
         sendErr("BUS");
-    }
-    m_busFault = !status.busOk;
-
-    if (status.watchdogTripped)
-    {
+        break;
+    case EventId::WatchdogExpired:
         m_writer.begin("TIMEOUT");
         m_writer.field("VEL");
         flush();
+        break;
+    case EventId::Arrived:
+        // Only the link that asked for the move is told it finished.
+        if (m_awaitingArrival)
+        {
+            m_awaitingArrival      = false;
+            const IPanTilt::Pose p = m_head.position();
+            m_writer.begin("ARRIVED");
+            m_writer.fixed1(p.pan);
+            m_writer.fixed1(p.tilt);
+            flush();
+        }
+        break;
+    case EventId::BusOk:
+    case EventId::LimitHit:
+    case EventId::Homed:
+    case EventId::HomingFailed:
+    case EventId::PositionLost:
+    case EventId::Stalled:
+    case EventId::DriverFaultChanged:
+    case EventId::DriverOnline:
+    case EventId::DriverOffline:
+    case EventId::EventsLost:
+        if (m_eventLines)
+        {
+            sendEvent(event);
+        }
+        break;
     }
+}
 
-    if (m_awaitingArrival && m_head.state() == IPanTilt::State::Holding)
+void TextProtocol::executeDtc(const Request& req)
+{
+    // $DTC          → $DTC,<count>
+    // $DTC,<index>  → $DTC,<index>,<code>,<PAN|TILT|->,<times>,<detail>,<first_ms>,<last_ms>
+    // $DTC,CLEAR    → $ACK,DTC
+    const std::size_t count = (m_trouble != nullptr) ? m_trouble->size() : 0;
+    if (req.token == "CLEAR")
     {
-        m_awaitingArrival = false;
-        const IPanTilt::Pose p = m_head.position();
-        m_writer.begin("ARRIVED");
-        m_writer.fixed1(p.pan);
-        m_writer.fixed1(p.tilt);
-        flush();
+        if (m_trouble != nullptr)
+        {
+            m_trouble->clear();
+        }
+        sendAck(req.command);
+        return;
     }
+    if (req.argCount == 0)
+    {
+        m_writer.begin("DTC");
+        m_writer.uint(static_cast<uint32_t>(count));
+        flush();
+        return;
+    }
+    const std::size_t index = static_cast<std::size_t>(req.args[0]);
+    if (index >= count)
+    {
+        sendNak(req.command, "RNG");
+        return;
+    }
+    const ::owlet::core::TroubleRecord& r = m_trouble->at(index);
+    m_writer.begin("DTC");
+    m_writer.uint(static_cast<uint32_t>(index));
+    m_writer.uint(static_cast<uint32_t>(r.code));
+    m_writer.field(r.axis == 0 ? "PAN" : (r.axis == 1 ? "TILT" : "-"));
+    m_writer.uint(r.count);
+    m_writer.uint(r.detail);
+    m_writer.uint(r.firstMs);
+    m_writer.uint(r.lastMs);
+    flush();
+}
+
+void TextProtocol::sendEvent(const ::owlet::core::Event& event)
+{
+    using ::owlet::core::EventId;
+    // $EVT,<name>,<PAN|TILT|->,<arg>
+    std::string_view name = "?";
+    switch (event.id)
+    {
+    case EventId::BusOk:              name = "BUSOK";    break;
+    case EventId::LimitHit:           name = "LIMIT";    break;
+    case EventId::Homed:              name = "HOMED";    break;
+    case EventId::HomingFailed:       name = "HOMEFAIL"; break;
+    case EventId::PositionLost:       name = "LOST";     break;
+    case EventId::Stalled:            name = "STALL";    break;
+    case EventId::DriverFaultChanged: name = "FAULT";    break;
+    case EventId::DriverOnline:       name = "ONLINE";   break;
+    case EventId::DriverOffline:      name = "OFFLINE";  break;
+    case EventId::EventsLost:         name = "OVERFLOW"; break;
+    case EventId::Arrived:
+    case EventId::WatchdogExpired:
+    case EventId::BusFault:
+        return;  // these have lines of their own
+    }
+    m_writer.begin("EVT");
+    m_writer.field(name);
+    m_writer.field(event.axis == 0 ? "PAN" : (event.axis == 1 ? "TILT" : "-"));
+    if (event.id == EventId::LimitHit)
+    {
+        m_writer.field(event.arg == static_cast<uint16_t>(::owlet::core::LimitEnd::Min) ? "MIN" : "MAX");
+    }
+    else
+    {
+        m_writer.uint(event.arg);
+    }
+    flush();
+}
+
+void TextProtocol::onTick(uint32_t nowMs)
+{
+    m_nowMs = nowMs;
 
     // Signed difference so the schedule survives the 49-day millis wrap.
     if (m_streamPeriodMs != 0 && static_cast<int32_t>(nowMs - m_nextStreamMs) >= 0)
@@ -266,6 +367,35 @@ void TextProtocol::execute(const Request& req)
         sendDiag(req.token == "PAN" ? ::owlet::core::Axis::Pan : ::owlet::core::Axis::Tilt,
                  req.token);
         return;
+    case Command::Events:
+        if (req.args[0] > 1.0f)
+        {
+            sendNak(req.command, "RNG");
+            return;
+        }
+        m_eventLines = req.args[0] != 0.0f;
+        sendAck(req.command);
+        return;
+    case Command::Dtc:
+        executeDtc(req);
+        return;
+    case Command::Seek:
+        sendResult(req.command, m_head.seekHome());
+        return;
+    case Command::Stat:
+    {
+        // $STAT,<events posted>,<events dropped>,<most ever waiting>,<late passes>,<longest pass ms>
+        const ::owlet::core::EventBus::Stats stats =
+            (m_events != nullptr) ? m_events->stats() : ::owlet::core::EventBus::Stats{};
+        m_writer.begin("STAT");
+        m_writer.uint(stats.posted);
+        m_writer.uint(stats.dropped);
+        m_writer.uint(stats.highWater);
+        m_writer.uint((m_loop != nullptr) ? m_loop->lateTicks : 0U);
+        m_writer.uint((m_loop != nullptr) ? m_loop->worstTickMs : 0U);
+        flush();
+        return;
+    }
     case Command::Limits:
     {
         const IPanTilt::Limits lim = m_head.limits();
@@ -290,6 +420,13 @@ void TextProtocol::executeCal(const Request& req)
     CalResult r = CalResult::Ok;
     if (req.token == "SAVE")
     {
+        // Writing to flash stops everything for tens of milliseconds, and
+        // a moving stepper would lose steps over it.
+        if (m_head.state() == IPanTilt::State::Moving)
+        {
+            sendNak(req.command, "MOV");
+            return;
+        }
         r = m_calibration.save();
     }
     else if (req.token == "RESET")
@@ -401,6 +538,15 @@ void TextProtocol::sendResult(Command cmd, Result result)
         return;
     case Result::Bus:
         sendNak(cmd, "BUS");
+        return;
+    case Result::Untrusted:
+        sendNak(cmd, "LOST");
+        return;
+    case Result::Busy:
+        sendNak(cmd, "BSY");
+        return;
+    case Result::Unsupported:
+        sendNak(cmd, "UNS");
         return;
     }
 }

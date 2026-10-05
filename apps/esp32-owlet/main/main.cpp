@@ -6,6 +6,8 @@
 
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/EventBus.hpp"
+#include "owlet/core/TroubleLog.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/text/TextProtocol.hpp"
@@ -103,7 +105,14 @@ extern "C" void app_main(void)
     static PCA9685::Channel       tiltCh = pwm.channel(CONFIG_OWLET_TILT_CHANNEL);
     static Servo                  pan(panCh, kPanCal);
     static Servo                  tilt(tiltCh, kTiltCal);
-    static ::owlet::core::PanTilt head(pan, tilt);
+    // Nothing on this head posts from an interrupt, and one task owns all
+    // of it, so the event queue needs no real lock.
+    static Esp32Clock                           clock;
+    static ::owlet::hal::NullInterruptLock      eventLock;
+    static ::owlet::core::StaticEventBus<16, 2> events(eventLock, clock);
+    static ::owlet::core::TroubleLog            trouble;
+    (void) events.attach(trouble);
+    static ::owlet::core::PanTilt               head(pan, tilt, &events);
     // Protocols are plug-ins: to add your own, construct it here and combine
     // them with core::ProtocolMux (docs/DESIGN.md §4.4).
     static Esp32NvsCalibrationStore calStore;
@@ -123,10 +132,10 @@ extern "C" void app_main(void)
     ESP_LOGI(kTag, "calibration: %s",
              calibrator.source() == ::owlet::core::ICalibration::Source::Saved ? "saved" : "factory");
 
-    static Esp32Clock                  clock;
     static ::owlet::text::TextProtocol protocol(usb, head, calibrator, clock,
-                                                ::owlet::core::kFirmwareVersion);
-    static ::owlet::core::ControlLoop  loop(usb, head, protocol);
+                                                ::owlet::core::kFirmwareVersion, nullptr, &events, &trouble);
+    (void) events.attach(protocol);
+    static ::owlet::core::ControlLoop  loop(usb, head, protocol, &events);
 
     loop.begin(clock.nowMs());
     TickType_t wake = xTaskGetTickCount();

@@ -50,7 +50,7 @@ constexpr uint8_t kArgs0  = 1U << 0;
 constexpr uint8_t kArgs1  = 1U << 1;
 constexpr uint8_t kArgs2  = 1U << 2;
 
-constexpr std::array<CommandSpec, 17> kCommands{{
+constexpr std::array<CommandSpec, 21> kCommands{{
     {"PING", Command::Ping, kArgs0, false},
     {"ENABLE", Command::Enable, kArgs0 | kArgs2, false},
     {"DISABLE", Command::Disable, kArgs0, false},
@@ -68,6 +68,10 @@ constexpr std::array<CommandSpec, 17> kCommands{{
     {"CAPS", Command::Caps, kArgs0, false},
     {"CAL", Command::Cal, 0, false},  // parsed by parseCal()
     {"DIAG", Command::Diag, 0, false},  // parsed by parseDiag()
+    {"EVENTS", Command::Events, kArgs1, true},
+    {"STAT", Command::Stat, kArgs0, false},
+    {"DTC", Command::Dtc, 0, false},  // parsed by parseDtc()
+    {"SEEK", Command::Seek, kArgs0, false},
 }};
 
 } // namespace
@@ -229,6 +233,32 @@ static RequestStatus parseDiag(const Sentence& s, Request& out)
     return RequestStatus::Ok;
 }
 
+// DTC  or  DTC,<index>  or  DTC,CLEAR
+static RequestStatus parseDtc(const Sentence& s, Request& out)
+{
+    if (s.fieldCount == 0)
+    {
+        return RequestStatus::Ok;
+    }
+    if (s.fieldCount != 1)
+    {
+        return RequestStatus::BadFormat;
+    }
+    if (s.fields[0] == "CLEAR")
+    {
+        out.token = s.fields[0];
+        return RequestStatus::Ok;
+    }
+    uint32_t index = 0;
+    if (!parseUnsigned(s.fields[0], index))
+    {
+        return RequestStatus::BadFormat;
+    }
+    out.args[0]  = static_cast<float>(index);
+    out.argCount = 1;
+    return RequestStatus::Ok;
+}
+
 // CAL,<PAN|TILT|SAVE|RESET>  or  CAL,<PAN|TILT>,<min_us>,<center_us>,<max_us>,<min_deg>,<max_deg>
 static RequestStatus parseCal(const Sentence& s, Request& out)
 {
@@ -279,6 +309,10 @@ RequestStatus parseRequest(const Sentence& sentence, Request& out)
         if (spec.command == Command::Diag)
         {
             return parseDiag(sentence, out);
+        }
+        if (spec.command == Command::Dtc)
+        {
+            return parseDtc(sentence, out);
         }
         const std::size_t n = sentence.fieldCount;
         if (n > 2 || (spec.argCountMask & (1U << n)) == 0)

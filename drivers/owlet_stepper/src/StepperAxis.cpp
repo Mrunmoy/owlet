@@ -11,7 +11,15 @@ using ::owlet::hal::AxisCalibration;
 StepperAxis::StepperAxis(::owlet::hal::IStepGenerator& steps,
                          ::owlet::hal::IDigitalOutput& enable,
                          const Config& config)
-    : m_steps(steps), m_enable(enable), m_cfg(config)
+    : StepperAxis(steps, enable, config, LimitSwitches{})
+{
+}
+
+StepperAxis::StepperAxis(::owlet::hal::IStepGenerator& steps,
+                         ::owlet::hal::IDigitalOutput& enable,
+                         const Config& config,
+                         LimitSwitches limits)
+    : m_steps(steps), m_enable(enable), m_cfg(config), m_limits(limits)
 {
     // A nonsensical build-time value must not become a division by zero or a
     // motor that can never start.
@@ -56,6 +64,7 @@ bool StepperAxis::engageAt(float deg)
     m_rate = 0.0f;
     m_fraction = 0.0f;
     m_refusedMs = 0;
+    m_blocked = false;
     m_velocityMode = false;
     m_velocityDegPerSec = 0.0f;
     m_enable.set(true);
@@ -100,6 +109,15 @@ void StepperAxis::stop()
     const int32_t lo = std::min(m_minSteps, m_positionSteps);
     const int32_t hi = std::max(m_maxSteps, m_positionSteps);
     m_targetSteps = std::clamp(static_cast<int32_t>(std::lround(resting)), lo, hi);
+}
+
+void StepperAxis::halt()
+{
+    m_rate = 0.0f;
+    m_fraction = 0.0f;
+    m_velocityMode = false;
+    m_velocityDegPerSec = 0.0f;
+    m_targetSteps = m_positionSteps;
 }
 
 void StepperAxis::setVelocity(float degPerSec)
@@ -153,6 +171,16 @@ bool StepperAxis::tick(uint32_t dtMs)
     {
         return true;
     }
+    // Something outside (a limit switch's interrupt) stopped the pulses in
+    // mid-burst. The move is over and the count is no longer exact; make the
+    // generator usable again so the axis can be driven away.
+    if (m_steps.halted())
+    {
+        halt();
+        m_blocked = true;
+        m_steps.resume();
+        return true;
+    }
     dtMs = std::min(dtMs, kMaxTickMs);
     const float seconds = static_cast<float>(dtMs) / 1000.0f;
     const float accel = m_cfg.accelDegPerSec2 * m_cfg.stepsPerDeg; // steps/s²
@@ -189,6 +217,18 @@ bool StepperAxis::tick(uint32_t dtMs)
         m_fraction = 0.0f;
     }
 
+    // A pressed switch outranks everything above: the soft limits may be
+    // wrong, or the position may be. Nothing goes toward it, and there is
+    // no ramp, because every further step is a step into the stop.
+    const ::owlet::hal::IDigitalInput* ahead =
+        (steps > 0) ? m_limits.max : ((steps < 0) ? m_limits.min : nullptr);
+    if (ahead != nullptr && ahead->active())
+    {
+        halt();
+        m_blocked = true;
+        return true;
+    }
+
     if (steps != 0)
     {
         if (!m_steps.emit(m_cfg.reversed ? -steps : steps, dtMs * 1000u))
@@ -201,6 +241,7 @@ bool StepperAxis::tick(uint32_t dtMs)
             return m_refusedMs < kStallReportMs;
         }
         m_refusedMs = 0;
+        m_blocked = false;
         m_positionSteps += steps;
     }
     if (m_positionSteps == goal)

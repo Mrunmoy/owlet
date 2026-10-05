@@ -104,6 +104,92 @@ class Diagnostics:
         return [name for bit, name in self.FAULT_NAMES.items() if self.faults & bit]
 
 
+@dataclass(frozen=True)
+class Trouble:
+    """One kind of trouble the head has recorded since power-up ($DTC,<index>)."""
+
+    code: int               # see NAMES; the numbers never change meaning
+    axis: str | None        # "pan", "tilt", or None when it concerns the whole head
+    count: int              # times it has happened
+    detail: int             # from the most recent occurrence; meaning depends on the code
+    first_ms: int           # device clock at the first occurrence
+    last_ms: int            # device clock at the most recent one
+
+    # code: (short name, what happened, what to check)
+    NAMES = {
+        10: ("MOTOR-BUS", "a motor update did not reach the hardware",
+             "the wiring between the controller and the motor driver"),
+        11: ("WATCHDOG", "velocity mode was stopped because no command arrived in time",
+             "the program sending rates stalled or the link dropped; normal if you stopped sending"),
+        20: ("DRIVER-OFFLINE", "the motor driver stopped answering",
+             "the motor supply and the driver's data wire"),
+        21: ("DRIVER-FAULT", "the motor driver raised a fault",
+             "the fault names given; a short or open coil means motor wiring"),
+        30: ("LIMIT", "a limit switch tripped outside homing",
+             "the soft limits and whether the head was moved by hand; home again"),
+        31: ("POSITION-LOST", "the head no longer knows where the axis is",
+             "home the head, or enable it at a known pose"),
+        32: ("STALL", "the motor stopped following its steps",
+             "something blocking the axis, or speed and acceleration set too high"),
+        40: ("HOMING-FAILED", "homing gave up",
+             "the limit switches: one missing, stuck, or wired to the wrong end"),
+        50: ("EVENTS-LOST", "the head could not report everything it noticed",
+             "nothing by itself; its state was re-read"),
+    }
+
+    @property
+    def name(self) -> str:
+        return self.NAMES.get(self.code, (f"CODE-{self.code}",))[0]
+
+    @property
+    def what(self) -> str:
+        return self.NAMES.get(self.code, ("", "trouble this client does not know (newer firmware?)"))[1]
+
+    @property
+    def check(self) -> str:
+        return self.NAMES.get(self.code, ("", "", "the firmware's documentation"))[2]
+
+    @property
+    def detail_text(self) -> str:
+        """The detail in words, where it has a meaning; otherwise empty."""
+        if self.code == 21:
+            return ", ".join(n for bit, n in Diagnostics.FAULT_NAMES.items() if self.detail & bit)
+        if self.code == 30:
+            return "max end" if self.detail else "min end"
+        if self.code == 40:
+            return f"reason {self.detail}"
+        if self.code == 50:
+            return f"{self.detail} lost last time"
+        return ""
+
+
+def parse_trouble(sentence: Sentence) -> Trouble:
+    f = sentence.fields
+    if sentence.name != "DTC" or len(f) != 7 or f[2] not in ("PAN", "TILT", "-"):
+        raise ProtocolError(f"not a trouble record: {sentence}")
+    try:
+        return Trouble(int(f[1]), None if f[2] == "-" else f[2].lower(), int(f[3]), int(f[4]),
+                       int(f[5]), int(f[6]))
+    except ValueError as e:
+        raise ProtocolError(f"bad trouble record: {sentence}") from e
+
+
+@dataclass(frozen=True)
+class HeadEvent:
+    """Something the head noticed and reported by itself ($EVT,<name>,<axis>,<arg>)."""
+
+    name: str               # "LIMIT", "STALL", "FAULT", "ONLINE", "OFFLINE", "LOST", "HOMED", ...
+    axis: str | None        # "pan", "tilt", or None when it concerns the whole head
+    arg: str                # as sent: a number, or "MIN" / "MAX" for a limit
+
+
+def parse_event(sentence: Sentence) -> HeadEvent:
+    f = sentence.fields
+    if sentence.name != "EVT" or len(f) != 3 or f[1] not in ("PAN", "TILT", "-"):
+        raise ProtocolError(f"not an event: {sentence}")
+    return HeadEvent(f[0], None if f[1] == "-" else f[1].lower(), f[2])
+
+
 _SOURCES = {"F": "factory", "S": "saved", "M": "modified"}
 
 

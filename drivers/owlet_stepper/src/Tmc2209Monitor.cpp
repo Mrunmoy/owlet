@@ -5,10 +5,12 @@ namespace owlet
 
 using ::owlet::hal::AxisDiagnostics;
 
-Tmc2209Monitor::Tmc2209Monitor(Tmc2209& driver, uint32_t phaseMs)
+Tmc2209Monitor::Tmc2209Monitor(Tmc2209& driver,
+                               uint32_t phaseMs,
+                               ::owlet::hal::IAxisDiagnosticsListener* listener)
     // Start one probe period "in", less the phase, so the first probe comes
     // straight away (or `phaseMs` later).
-    : m_driver(driver), m_elapsedMs(phaseMs < kProbePeriodMs ? kProbePeriodMs - phaseMs : 0)
+    : m_driver(driver), m_listener(listener), m_elapsedMs(phaseMs < kProbePeriodMs ? kProbePeriodMs - phaseMs : 0)
 {
 }
 
@@ -23,6 +25,7 @@ void Tmc2209Monitor::poll(uint32_t dtMs)
         {
             m_elapsedMs = 0;
             probe();
+            notifyIfChanged();
         }
         return;
     }
@@ -30,6 +33,22 @@ void Tmc2209Monitor::poll(uint32_t dtMs)
     {
         m_elapsedMs = 0;
         readNext();
+        notifyIfChanged();
+    }
+}
+
+void Tmc2209Monitor::notifyIfChanged()
+{
+    if (m_listener == nullptr)
+    {
+        return;
+    }
+    const AxisDiagnostics now = diagnostics();
+    if (now.available != m_told.available || now.faults != m_told.faults ||
+        now.stalled != m_told.stalled)
+    {
+        m_told = now;
+        m_listener->onDiagnosticsChanged(now);
     }
 }
 
@@ -42,6 +61,7 @@ void Tmc2209Monitor::probe()
         m_step = Step::Status;
         m_status = Tmc2209::Status{};
         m_load = 0;
+        m_loadKnown = false;
     }
 }
 
@@ -56,6 +76,7 @@ void Tmc2209Monitor::readNext()
         break;
     case Step::Load:
         ok = m_driver.readLoad(m_load);
+        m_loadKnown = m_loadKnown || ok;
         m_step = Step::ResetFlag;
         break;
     case Step::ResetFlag:
@@ -110,7 +131,8 @@ AxisDiagnostics Tmc2209Monitor::diagnostics() const
     d.currentMa = m_driver.runCurrentMa();
     // The load value is only a measurement while the motor is turning.
     const uint16_t threshold = static_cast<uint16_t>(2U * m_driver.stallThreshold());
-    d.stalled = threshold != 0 && !m_status.standstill && m_load <= threshold;
+    // Nor is it one before it has been read: zero would look like a stall.
+    d.stalled = threshold != 0 && m_loadKnown && !m_status.standstill && m_load <= threshold;
     return d;
 }
 

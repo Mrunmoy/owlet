@@ -77,12 +77,24 @@ public:
     // writes two words, which is not safe against an interrupt doing the same.
     [[nodiscard]] bool emit(int32_t steps, uint32_t durationUs) override;
 
+    // Freezes the state machine where it is: no further edge leaves the
+    // chip. Only a register write and a flag, so an interrupt may call it.
+    void halt() override;
+    // Empties the FIFO, puts STEP low and restarts the program from the top.
+    void resume() override;
+    [[nodiscard]] bool halted() const override
+    {
+        return m_halted;
+    }
+
+
 private:
     PicoStepProgram& m_program;
     const unsigned m_sm;
     const unsigned m_stepPin;
     const unsigned m_dirPin;
     bool m_ready{false};
+    volatile bool m_halted{false}; // written by halt() in an interrupt
 };
 
 } // namespace owlet::platform::pico

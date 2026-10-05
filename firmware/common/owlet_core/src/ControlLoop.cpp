@@ -5,8 +5,11 @@
 namespace owlet::core
 {
 
-ControlLoop::ControlLoop(::owlet::hal::IByteSource& input, ITickable& motion, IProtocol& protocol)
-    : m_input(input), m_motion(motion), m_protocol(protocol)
+ControlLoop::ControlLoop(::owlet::hal::IByteSource& input,
+                         ITickable&                 motion,
+                         IProtocol&                 protocol,
+                         EventBus*                  events)
+    : m_input(input), m_motion(motion), m_protocol(protocol), m_events(events)
 {
 }
 
@@ -20,9 +23,22 @@ void ControlLoop::service(uint32_t nowMs)
 {
     const uint32_t dt = nowMs - m_lastTickMs;  // unsigned: correct across the millis wrap
     m_lastTickMs      = nowMs;
+    if (m_stats != nullptr)
+    {
+        // The clock counts whole milliseconds, so a pass one count over its
+        // period may be on time; two over is late.
+        m_stats->lateTicks += (dt > m_periodMs + 1U) ? 1U : 0U;
+        m_stats->worstTickMs = (dt > m_stats->worstTickMs) ? dt : m_stats->worstTickMs;
+    }
 
-    const TickStatus status = m_motion.tick(dt);
-    m_protocol.onTick(nowMs, status);
+    // The step's outcome reaches listeners as events; the return value is
+    // for callers that drive a tickable directly.
+    (void) m_motion.tick(dt);
+    if (m_events != nullptr)
+    {
+        (void) m_events->dispatch();
+    }
+    m_protocol.onTick(nowMs);
 
     std::array<uint8_t, kReadChunk> chunk{};
     for (std::size_t c = 0; c < kMaxChunksPerService; ++c)

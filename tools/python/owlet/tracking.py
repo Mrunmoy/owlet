@@ -287,6 +287,8 @@ class Tracker:
             self.failed = False
             self._next_resync = time.monotonic() + self._resync_s
             self._running = True
+            # This reader needs every line; handlers still run, from here.
+            self._head.hold_listener()
             self._thread = threading.Thread(target=self._read_loop, name="owlet-tracker",
                                             daemon=True)
             self._thread.start()
@@ -314,6 +316,8 @@ class Tracker:
             self._head.await_reply("STREAM")
         except Exception as e:  # noqa: BLE001 - cleanup must not raise
             self.last_error = OwletError(f"tracker stop: {e}")
+        finally:
+            self._head.release_listener()
 
     def set_rates(self, pan_deg_s: float, tilt_deg_s: float) -> None:
         """Command turn rates now (fire-and-forget; also feeds the watchdog).

@@ -74,6 +74,15 @@ public:
 
     // Freeze: target := current position. Leaves velocity mode.
     void stop() override;
+    // A servo holds wherever it is told to: there is nothing sharper.
+    void halt() override
+    {
+        stop();
+    }
+    [[nodiscard]] bool blocked() const override
+    {
+        return false;
+    }
 
     // Velocity mode at a signed rate (clamped to ±kMaxSpeedDegPerSec).
     // Zero is the same as stop(). Independent of speed(). No bus traffic.

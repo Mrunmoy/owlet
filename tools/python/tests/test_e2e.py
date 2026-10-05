@@ -53,7 +53,7 @@ class EndToEndTest(unittest.TestCase):
 
     def test_handshake(self):
         self.assertEqual(self.head.protocol_version, 3)
-        self.assertEqual(self.head.firmware_version, "0.4.0")
+        self.assertEqual(self.head.firmware_version, "0.5.0")
 
     def test_boots_disabled_and_refuses_motion(self):
         self.assertFalse(self.head.position().enabled)

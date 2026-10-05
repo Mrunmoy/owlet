@@ -9,9 +9,11 @@ add_library(owlet::pico ALIAS owlet_pico)
 target_sources(owlet_pico INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoClock.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoDelay.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/PicoDigitalInput.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoDigitalOutput.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoFlashCalibrationStore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoHalfDuplexUart.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/PicoInterruptLock.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoStepGenerator.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoUsbSerial.cpp
 )

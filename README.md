@@ -240,7 +240,7 @@ sudo tools/dev/install-udev.sh     # Linux, once: USB access without sudo
 tools/dev/doctor.sh                # is this machine ready?
 ./build.py --host -t               # build and run every test on the PC
 ./build.py --pico --flash          # stepper head   (or: ./build.py --esp --flash  for the servo head)
-owlet ping                         # owlet 0.4.0 (protocol v3) on /dev/ttyACM0
+owlet ping                         # owlet 0.5.0 (protocol v3) on /dev/ttyACM0
 owlet selftest                     # exercise both motors and report
 ```
 
@@ -303,7 +303,7 @@ The port is auto-detected by USB vendor ID (Espressif for the servo head, Raspbe
 
 ```console
 $ owlet selftest
-  PASS  link: owlet 0.4.0, protocol v3, on /dev/ttyACM0
+  PASS  link: owlet 0.5.0, protocol v3, on /dev/ttyACM0
   PASS  ranges: pan -90..90, tilt -60..60 deg; speed up to 240 deg/s
   PASS  drivers at rest: pan: 458 mA; tilt: 458 mA
 
@@ -349,6 +349,39 @@ with Owlet() as head:                       # or Owlet("/dev/ttyACM1"), Owlet("C
 ```
 
 The only dependency is [`pyserial`](https://pypi.org/project/pyserial/).
+
+**Being told instead of asking.** The head reports what it notices, and your program can connect a function to each kind of report:
+
+```python
+def on_fault(axis, faults):
+    print(axis, "driver reports", faults)
+
+with Owlet() as head:
+    head.arrived.connect(lambda pan, tilt: print("arrived at", pan, tilt))
+    head.fault_changed.connect(on_fault)
+    head.watchdog_expired.connect(lambda: print("no command in time; head stopped"))
+
+    head.enable()
+    head.move(30, -15)          # returns at once; the arrival is reported when it happens
+    ...                         # your program gets on with its own work
+```
+
+Connecting the first function starts a background reader, so the functions run without your program reading anything. A program that connects none behaves exactly as before, with no extra thread. `Owlet(dispatch="manual")` never starts the thread: functions then run during your own calls and whenever you call `head.process_events()`, which suits a GUI loop.
+
+| Signal | Called with | When |
+|--------|-------------|------|
+| `arrived` | `pan, tilt` | a position move finished |
+| `watchdog_expired` | | velocity mode was stopped for lack of a command |
+| `bus_fault` / `bus_ok` | | commands to the motors started / stopped failing |
+| `driver_online` / `driver_offline` | `axis` | a motor driver started / stopped answering |
+| `fault_changed` | `axis, faults` | a motor driver's fault bits changed (see `$DIAG`) |
+| `limit_hit` | `axis, end` | a limit switch tripped (`"min"` or `"max"`) |
+| `position_lost` | `axis` | the head no longer knows where that axis is |
+| `stalled` | `axis` | the motor stopped following its steps |
+| `homed` / `homing_failed` | / `axis, code` | homing finished or gave up |
+| `events_lost` | `count` | the head could not report everything; re-read its state |
+
+The limit, position, stall and homing reports are defined in the protocol and the client now; the head starts sending them when limit switches and stall detection are fitted.
 
 ### Any other language: the wire protocol
 
@@ -416,7 +449,7 @@ owlet -p /tmp/owlet watch
 
 | Request | Reply | Notes |
 |---------|-------|-------|
-| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.4.0` |
+| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.5.0` |
 | `$ENABLE` | `$ACK,ENABLE` | Energise at the last known position (0, 0 after boot) |
 | `$ENABLE,<pan>,<tilt>` | `$ACK,ENABLE` | Energise at a pose; if already enabled, moves there smoothly instead |
 | `$DISABLE` | `$ACK,DISABLE` | Servos limp |
@@ -434,9 +467,15 @@ owlet -p /tmp/owlet watch
 | `$CLOCK` | `$CLOCK,<ms>` | Device uptime in ms (wraps after ~49.7 days) |
 | `$CAPS` | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Capabilities, e.g. `$CAPS,1.0,500.0,500.0,50,5000,50` |
 | `$DIAG,<AXIS>` | `$DIAG,<AXIS>,<U\|N>,<faults>,<stalled>,<load>,<mA>` | What the motor driver reports. `N` = no driver data (servo head, or the motor supply is off). Faults are a bit mask; see [`docs/DESIGN.md` §5.7](docs/DESIGN.md) |
+| `$EVENTS,<0\|1>` | `$ACK,EVENTS` | Turn the `$EVT` lines off or on. On at power-up |
+| `$SEEK` | `$ACK,SEEK` | Find the reference position from the limit switches. The head moves by itself; the outcome is `$EVT,HOMED` or `$EVT,HOMEFAIL`. `NAK,SEEK,UNS` on a head without switches |
+| `$DTC` | `$DTC,<count>` | How many kinds of trouble have been recorded since power-up |
+| `$DTC,<index>` | `$DTC,<index>,<code>,<PAN\|TILT\|->,<times>,<detail>,<first_ms>,<last_ms>` | One of them. Codes are listed under [When something goes wrong](#when-something-goes-wrong) |
+| `$DTC,CLEAR` | `$ACK,DTC` | Forget them |
+| `$STAT` | `$STAT,<posted>,<dropped>,<high>,<late>,<worst_ms>` | Health counters: events raised, events lost, the most that were ever waiting; control-loop passes that ran late, and the longest gap between two |
 | `$CAL,<AXIS>` | `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>,<R\|N>,<F\|S\|M>` | Calibration of `PAN`/`TILT`: reversed or not; factory / saved / modified |
 | `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>` | `$ACK,CAL` | Set it. Pulse changes need the servos disabled (`NAK,CAL,ENA`); limits can change any time |
-| `$CAL,SAVE` / `$CAL,RESET` | `$ACK,CAL` | Persist to flash / restore factory values and erase (reset needs disabled) |
+| `$CAL,SAVE` / `$CAL,RESET` | `$ACK,CAL` | Persist to flash / restore factory values and erase (reset needs disabled). `SAVE` is refused with `NAK,CAL,MOV` while the head is moving |
 
 Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v3** (since owlet 0.3.0); clients should check the version in `$PONG`.
 
@@ -447,8 +486,50 @@ Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have
 | `$READY,<proto>,<fw>` | Once after boot |
 | `$ARRIVED,<pan>,<tilt>` | Exactly once for every accepted `MOVE`/`NUDGE`/`HOME` (cancelled by `STOP`/`DISABLE`) |
 | `$POS,…` | At the `STREAM` rate |
-| `$ERR,BUS` | A servo update failed to reach the PCA9685 |
+| `$ERR,BUS` | A motor update failed to reach the hardware |
 | `$TIMEOUT,VEL` | The velocity watchdog stopped the head |
+| `$EVT,<name>,<PAN\|TILT\|->,<arg>` | Something else the head noticed (firmware 0.5.0 and later). `$EVENTS,0` silences these |
+
+| `$EVT` name | `arg` | Meaning |
+|-------------|-------|---------|
+| `ONLINE` / `OFFLINE` | 0 | That axis's motor driver started / stopped answering |
+| `FAULT` | fault bits | That driver's faults changed (same bits as `$DIAG`; 0 = cleared) |
+| `BUSOK` | 0 | Motor updates are getting through again after `$ERR,BUS` |
+| `OVERFLOW` | count | That many events could not be reported. Re-read the head's state |
+| `LIMIT` | `MIN` / `MAX` | A limit switch tripped |
+| `LOST` | 0 | The head no longer knows where that axis is |
+| `STALL` | 0 | The motor stopped following its steps |
+| `HOMED` / `HOMEFAIL` | 0 / reason | Homing finished / gave up |
+
+`LIMIT`, `LOST`, `STALL`, `HOMED` and `HOMEFAIL` are reserved for limit switches and stall detection, which are not fitted yet. A client should ignore `$EVT` names it does not know.
+
+### When something goes wrong
+
+The head keeps a short list of what has gone wrong since it was powered: what, on which axis, how many times, and when. Ask for it at any time:
+
+```
+$ owlet dtc
+11 WATCHDOG: velocity mode was stopped because no command arrived in time
+     2 times, last 0.4 s ago. Check: the program sending rates stalled or the link dropped; normal if you stopped sending.
+21 DRIVER-FAULT on tilt: the motor driver raised a fault (short on coil A)
+     once, last 12.0 s ago. Check: the fault names given; a short or open coil means motor wiring.
+```
+
+`owlet dtc --clear` empties the list. From Python it is `head.trouble_codes()` and `head.clear_trouble_codes()`. The list is kept in memory only, so a power cycle also clears it.
+
+| Code | Name | Meaning | Detail field |
+|------|------|---------|--------------|
+| 10 | `MOTOR-BUS` | A motor update did not reach the hardware | |
+| 11 | `WATCHDOG` | Velocity mode was stopped for lack of a command | |
+| 20 | `DRIVER-OFFLINE` | A motor driver stopped answering | |
+| 21 | `DRIVER-FAULT` | A motor driver raised a fault | its fault bits, as in `$DIAG` |
+| 30 | `LIMIT` | A limit switch tripped outside homing | 0 = min end, 1 = max end |
+| 31 | `POSITION-LOST` | The head no longer knows where the axis is | |
+| 32 | `STALL` | The motor stopped following its steps | |
+| 40 | `HOMING-FAILED` | Homing gave up | the reason |
+| 50 | `EVENTS-LOST` | The head could not report everything it noticed | how many, last time |
+
+A code's number never changes meaning. Codes 30 to 40 are recorded once limit switches and stall detection are fitted. A driver that was never powered is not trouble by this list's reckoning, because nothing changed; `owlet diag` shows that.
 
 ### Errors
 
@@ -456,6 +537,9 @@ Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have
 |-------|---------|
 | `$NAK,<CMD>,FMT` | Wrong number of fields or a malformed number |
 | `$NAK,<CMD>,RNG` | Value out of range |
+| `$NAK,<CMD>,LOST` | The head does not know where it is (it ran into a limit switch, or homing failed). `SEEK`, or `DISABLE` then `ENABLE,<pan>,<tilt>` at a known pose |
+| `$NAK,<CMD>,BSY` | Homing is under way. `STOP` aborts it |
+| `$NAK,<CMD>,UNS` | This head cannot do that |
 | `$NAK,<CMD>,DIS` | Servos are disabled; send `ENABLE` first |
 | `$NAK,<CMD>,BUS` | PCA9685 didn't respond (check wiring and power) |
 | `$NAK,CAL,ENA` | Pulse calibration can only change while the servos are disabled |
@@ -511,7 +595,7 @@ public:
     bool claims(uint8_t byte, bool atLineStart) const override;   // e.g. byte == 0xFF
     owlet::core::ConsumeResult consume(const uint8_t* data, std::size_t len) override;
     void begin(uint32_t nowMs) override;
-    void onTick(uint32_t nowMs, const owlet::core::TickStatus& status) override;
+    void onTick(uint32_t nowMs) override;
 };
 ```
 
@@ -521,8 +605,10 @@ Then, in the app's `main.cpp` (`apps/esp32-owlet/main/` or `apps/pico-owlet/`), 
 static owlet::text::TextProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
 static MyProtocol                   mine(usb, head);
 static owlet::core::ProtocolMux<2>  protocols({&native, &mine});
-static owlet::core::ControlLoop     loop(usb, head, protocols);
+static owlet::core::ControlLoop     loop(usb, head, protocols, &events);
 ```
+
+A protocol that wants to be told when a move arrives, the watchdog fires or a motor stops answering also implements `owlet::core::IEventObserver` and is attached to the event bus: `events.attach(mine);`.
 
 The multiplexer offers the first byte of each frame to each protocol in order. Native frames start with `$`, so anything else is free for your protocol. The contract and an example test setup are in [`docs/DESIGN.md` §4.3–4.4](docs/DESIGN.md#43-the-iprotocol-contract).
 
@@ -668,7 +754,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 
 ## Project status and roadmap
 
-**v0.4.0 firmware, v0.3.2 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. There are two reference heads. On the servo head (ESP32-S3), motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` were verified with firmware 0.3.0; 0.4.0 builds for it but has not been re-run on that hardware. On the stepper head (Raspberry Pi Pico), motion, directions, ranges, speed and acceleration limits, velocity mode, the watchdog and calibration storage are verified with 0.4.0.
+**v0.5.0 firmware, v0.4.0 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. There are two reference heads. On the servo head (ESP32-S3), motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` were verified with firmware 0.3.0; 0.4.0 builds for it but has not been re-run on that hardware. On the stepper head (Raspberry Pi Pico), motion, directions, ranges, speed and acceleration limits, velocity mode, the watchdog and calibration storage were verified with 0.4.0. Firmware 0.5.0 makes the head report changes as events; on the Pico its arrival, watchdog and event-counter paths were checked with the motors disconnected, and the driver reports (`ONLINE`, `FAULT`) have host tests only so far.
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection

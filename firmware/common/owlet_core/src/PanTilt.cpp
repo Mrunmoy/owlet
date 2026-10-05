@@ -8,12 +8,81 @@ namespace owlet::core
 
 using ::owlet::hal::IAxis;
 
-PanTilt::PanTilt(IAxis& pan, IAxis& tilt) : m_pan(pan), m_tilt(tilt) {}
+PanTilt::PanTilt(IAxis& pan, IAxis& tilt, IEventSink* events, IHoming* homing)
+    : m_pan(pan), m_tilt(tilt), m_events(events), m_homing(homing)
+{
+}
+
+void PanTilt::announce(EventId id, uint8_t axis, uint16_t arg)
+{
+    if (m_events != nullptr)
+    {
+        (void) m_events->post(id, axis, arg);
+    }
+}
+
+PanTilt::Result PanTilt::mayMove() const
+{
+    if (m_trust == Trust::Homing)
+    {
+        return Result::Busy;
+    }
+    if (!bothEngaged())
+    {
+        return Result::Disabled;
+    }
+    return (m_trust == Trust::Lost) ? Result::Untrusted : Result::Ok;
+}
+
+void PanTilt::losePosition(uint8_t axis)
+{
+    m_pan.halt();
+    m_tilt.halt();
+    m_arrivalOwed = false;
+    m_trust       = Trust::Lost;
+    announce(EventId::PositionLost, axis, 0);
+}
+
+PanTilt::Result PanTilt::seekHome()
+{
+    if (m_homing == nullptr)
+    {
+        return Result::Unsupported;
+    }
+    if (m_trust == Trust::Homing || !m_homing->start())
+    {
+        return Result::Busy;
+    }
+    m_arrivalOwed = false;
+    m_trust       = Trust::Homing;
+    return Result::Ok;
+}
+
+void PanTilt::serviceHoming()
+{
+    m_homing->update();
+    if (m_homing->busy())
+    {
+        return;
+    }
+    if (m_homing->outcome() == IHoming::Outcome::Done)
+    {
+        m_trust = Trust::Trusted;
+        announce(EventId::Homed);
+        return;
+    }
+    m_trust = Trust::Lost;
+    announce(EventId::HomingFailed, m_homing->failedAxis(), m_homing->failureCode());
+}
 
 // ── Power ───────────────────────────────────────────────────────────────────
 
 PanTilt::Result PanTilt::enable()
 {
+    if (m_trust == Trust::Homing)
+    {
+        return Result::Busy;
+    }
     // Last known position, not target: after a mid-move DISABLE the horn is
     // near the position estimate, so energising there keeps the snap small.
     // Axes that are still powered are left alone.
@@ -36,11 +105,23 @@ PanTilt::Result PanTilt::enable()
 
 PanTilt::Result PanTilt::enableAt(float panDeg, float tiltDeg)
 {
+    if (m_trust == Trust::Homing)
+    {
+        return Result::Busy;
+    }
     if (!inLimits(m_pan, panDeg) || !inLimits(m_tilt, tiltDeg))
     {
         return Result::Range;
     }
-    // A powered axis must never snap: it slews to its pose instead.
+    // Naming the pose of a limp head is how its position becomes known
+    // again; a powered head would have to travel there, which it may not.
+    if (m_trust == Trust::Lost && anyEngaged())
+    {
+        return Result::Untrusted;
+    }
+    // A powered axis must never snap: it slews to its pose instead, and
+    // that is a move. From disabled the pose is taken at once.
+    const bool slews = anyEngaged();
     const auto bring = [](IAxis& s, float deg)
     {
         if (s.engaged())
@@ -53,13 +134,22 @@ PanTilt::Result PanTilt::enableAt(float panDeg, float tiltDeg)
     if (!bring(m_pan, panDeg) || !bring(m_tilt, tiltDeg))
     {
         releaseBoth();
+        m_arrivalOwed = false;
         return Result::Bus;
     }
+    m_arrivalOwed = slews;
+    m_trust       = Trust::Trusted;
     return Result::Ok;
 }
 
 PanTilt::Result PanTilt::disable()
 {
+    if (m_trust == Trust::Homing)
+    {
+        m_homing->abort();
+        serviceHoming();
+    }
+    m_arrivalOwed     = false;
     const bool panOk  = m_pan.release();
     const bool tiltOk = m_tilt.release();
     return (panOk && tiltOk) ? Result::Ok : Result::Bus;
@@ -75,9 +165,9 @@ void PanTilt::releaseBoth()
 
 PanTilt::Result PanTilt::move(float panDeg, float tiltDeg)
 {
-    if (!bothEngaged())
+    if (const Result r = mayMove(); r != Result::Ok)
     {
-        return Result::Disabled;
+        return r;
     }
     if (!inLimits(m_pan, panDeg) || !inLimits(m_tilt, tiltDeg))
     {
@@ -85,14 +175,15 @@ PanTilt::Result PanTilt::move(float panDeg, float tiltDeg)
     }
     m_pan.setTarget(panDeg);
     m_tilt.setTarget(tiltDeg);
+    m_arrivalOwed = true;
     return Result::Ok;
 }
 
 PanTilt::Result PanTilt::nudge(float dPanDeg, float dTiltDeg)
 {
-    if (!bothEngaged())
+    if (const Result r = mayMove(); r != Result::Ok)
     {
-        return Result::Disabled;
+        return r;
     }
     if (!std::isfinite(dPanDeg) || !std::isfinite(dTiltDeg))
     {
@@ -100,6 +191,7 @@ PanTilt::Result PanTilt::nudge(float dPanDeg, float dTiltDeg)
     }
     m_pan.setTarget(m_pan.targetDeg() + dPanDeg);
     m_tilt.setTarget(m_tilt.targetDeg() + dTiltDeg);
+    m_arrivalOwed = true;
     return Result::Ok;
 }
 
@@ -110,12 +202,19 @@ PanTilt::Result PanTilt::home()
 
 PanTilt::Result PanTilt::stop()
 {
+    if (m_trust == Trust::Homing)
+    {
+        m_homing->abort();  // brakes the axis it was moving
+        serviceHoming();
+        return Result::Ok;
+    }
     if (!anyEngaged())
     {
         return Result::Disabled;
     }
     m_pan.stop();
     m_tilt.stop();
+    m_arrivalOwed = false;  // a stopped move never arrives
     return Result::Ok;
 }
 
@@ -138,9 +237,9 @@ PanTilt::Result PanTilt::setVelocity(float panDegPerSec, float tiltDegPerSec)
     {
         return stop();  // "stop" must work even on a partially engaged head
     }
-    if (!bothEngaged())
+    if (const Result r = mayMove(); r != Result::Ok)
     {
-        return Result::Disabled;
+        return r;
     }
     const float vmax = capabilities().velocityMax;
     // Written as negated comparisons so NaN is rejected too.
@@ -152,6 +251,7 @@ PanTilt::Result PanTilt::setVelocity(float panDegPerSec, float tiltDegPerSec)
     m_pan.setVelocity(panDegPerSec);
     m_tilt.setVelocity(tiltDegPerSec);
     m_velocityAgeMs = 0;
+    m_arrivalOwed   = false;  // nor does velocity mode
     return Result::Ok;
 }
 
@@ -180,6 +280,11 @@ TickStatus PanTilt::tick(uint32_t dtMs)
     const bool tiltOk = m_tilt.tick(step);
     TickStatus status;
     status.busOk = panOk && tiltOk;
+    if (status.busOk == m_busFault)
+    {
+        m_busFault = !status.busOk;
+        announce(m_busFault ? EventId::BusFault : EventId::BusOk);
+    }
 
     // The motion for this step happens first: a refreshed command is honoured
     // for exactly one watchdog period before the head is stopped.
@@ -197,7 +302,21 @@ TickStatus PanTilt::tick(uint32_t dtMs)
             m_pan.stop();
             m_tilt.stop();
             status.watchdogTripped = true;
+            announce(EventId::WatchdogExpired);
         }
+    }
+    if (m_trust == Trust::Homing)
+    {
+        serviceHoming();
+    }
+    else if (m_trust == Trust::Trusted && (m_pan.blocked() || m_tilt.blocked()))
+    {
+        losePosition(m_pan.blocked() ? uint8_t{0} : uint8_t{1});
+    }
+    if (m_arrivalOwed && state() == State::Holding)
+    {
+        m_arrivalOwed = false;
+        announce(EventId::Arrived);
     }
     return status;
 }

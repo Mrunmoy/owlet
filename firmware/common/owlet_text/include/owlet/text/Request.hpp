@@ -29,6 +29,10 @@ enum class Command : uint8_t
     Caps,
     Cal,
     Diag,
+    Events,
+    Stat,
+    Dtc,
+    Seek,
 };
 
 enum class RequestStatus : uint8_t

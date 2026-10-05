@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include <array>
 #include <cstdint>
 
@@ -243,6 +245,46 @@ TEST(Tmc2209Monitor, CarriesFaultsLoadAndStallToTheDiagnostics)
     d = monitor.diagnostics();
     EXPECT_EQ(d.faults, 0);
     EXPECT_FALSE(d.stalled);
+}
+
+TEST(Tmc2209Monitor, TellsItsListenerOnlyWhenSomethingChanges)
+{
+    class Listener final : public ::owlet::hal::IAxisDiagnosticsListener
+    {
+    public:
+        void onDiagnosticsChanged(const AxisDiagnostics& now) override
+        {
+            heard.push_back(now);
+        }
+        std::vector<AxisDiagnostics> heard;
+    };
+    Rig r;
+    Listener listener;
+    r.chip.powered = false;
+    r.chip.reg[Tmc2209::kSgResult] = 300; // turning freely
+    Tmc2209Monitor monitor(r.driver, 0, &listener);
+    run(monitor, 2500);
+    EXPECT_TRUE(listener.heard.empty()) << "a chip that was never there has not changed";
+
+    r.chip.powered = true;
+    run(monitor, 1200);
+    ASSERT_EQ(listener.heard.size(), 1u);
+    EXPECT_TRUE(listener.heard[0].available);
+    EXPECT_FALSE(listener.heard[0].stalled) << "no load reading yet is not a stall";
+
+    r.chip.reg[Tmc2209::kSgResult] = 400; // the load figure moving about is not news
+    run(monitor, 2000);
+    EXPECT_EQ(listener.heard.size(), 1u);
+
+    r.chip.reg[Tmc2209::kDrvStatus] = (1u << 1); // over-temperature
+    run(monitor, 600);
+    ASSERT_EQ(listener.heard.size(), 2u);
+    EXPECT_EQ(listener.heard[1].faults, AxisDiagnostics::kOverTemp);
+
+    r.chip.powered = false;
+    run(monitor, 1500);
+    ASSERT_EQ(listener.heard.size(), 3u);
+    EXPECT_FALSE(listener.heard[2].available);
 }
 
 TEST(Tmc2209Monitor, ReconfiguresAfterTheChipLosesPower)

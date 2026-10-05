@@ -1,6 +1,7 @@
 #pragma once
 
 #include "owlet/hal/IAxisDiagnostics.hpp"
+#include "owlet/hal/IAxisDiagnosticsListener.hpp"
 #include "owlet/hal/IPollable.hpp"
 #include "owlet/stepper/Tmc2209.hpp"
 
@@ -18,6 +19,8 @@ namespace owlet
 //    and reset flag are read in turn.
 //  - A chip that restarted (its supply dipped) is configured again; one
 //    that stops answering goes back to being probed.
+//  - A listener, if given, is told when the chip comes or goes, and when
+//    its faults or stall indication change.
 class Tmc2209Monitor final : public ::owlet::hal::IPollable, public ::owlet::hal::IAxisDiagnostics
 {
 public:
@@ -27,7 +30,9 @@ public:
 
     // `phaseMs` delays this monitor's schedule, so two drivers don't both
     // take their slice in the same loop pass.
-    explicit Tmc2209Monitor(Tmc2209& driver, uint32_t phaseMs = 0);
+    explicit Tmc2209Monitor(Tmc2209& driver,
+                            uint32_t phaseMs = 0,
+                            ::owlet::hal::IAxisDiagnosticsListener* listener = nullptr);
 
     Tmc2209Monitor(const Tmc2209Monitor&) = delete;
     Tmc2209Monitor& operator=(const Tmc2209Monitor&) = delete;
@@ -51,14 +56,18 @@ private:
     void probe();
     void readNext();
     void noteFailure();
+    void notifyIfChanged();
 
     Tmc2209& m_driver;
+    ::owlet::hal::IAxisDiagnosticsListener* m_listener;
+    ::owlet::hal::AxisDiagnostics m_told{}; // what the listener last heard
     Tmc2209::Status m_status{};
     uint32_t m_elapsedMs;
     uint16_t m_load{0};
     Step m_step{Step::Status};
     uint8_t m_failures{0};
     bool m_online{false};
+    bool m_loadKnown{false}; // a load figure has been read since coming online
 };
 
 } // namespace owlet

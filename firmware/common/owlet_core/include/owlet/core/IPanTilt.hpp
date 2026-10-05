@@ -19,6 +19,9 @@ public:
         Range,     // argument outside limits
         Disabled,  // motion requested while disabled
         Bus,       // hardware write failed
+        Untrusted,   ///< the head does not know where it is; home it or enable it at a pose
+        Busy,        ///< homing is under way
+        Unsupported, ///< this head cannot do that
     };
 
     enum class State : uint8_t
@@ -72,6 +75,16 @@ public:
     [[nodiscard]] virtual Result stop() = 0;
     // Slew speed for position moves, deg/s.
     [[nodiscard]] virtual Result setSpeed(float degPerSec) = 0;
+
+    /// Finds the reference position from the head's limit switches. The
+    /// head moves by itself until it is done; the outcome is announced as
+    /// an event. Unsupported on a head without switches.
+    [[nodiscard]] virtual Result seekHome() = 0;
+
+    /// @return false after the head has lost track of where it is (it ran
+    ///         into a limit switch, or homing failed). Motion is refused
+    ///         until it is homed, or disabled and enabled at a known pose.
+    [[nodiscard]] virtual bool positionTrusted() const = 0;
 
     // ── Velocity mode ───────────────────────────────────────────────────────
 

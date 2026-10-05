@@ -116,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("clock", help="print the device clock (ms since boot)")
     sub.add_parser("caps", help="print the head's capabilities")
     sub.add_parser("diag", help="print what the motor drivers report: faults, load, current")
+    sub.add_parser("stat", help="print the head's health counters")
+    sub.add_parser("seek", help="find the reference position from the limit switches (the head moves)")
+    dtc = sub.add_parser("dtc", help="list what has gone wrong since power-up, and what to check")
+    dtc.add_argument("--clear", action="store_true", help="forget the recorded trouble")
     st = sub.add_parser("selftest", help="exercise the motors inside the head's limits and report")
     st.add_argument("-y", "--yes", action="store_true",
                     help="don't ask before moving or for a visual check at the end")
@@ -218,6 +222,30 @@ def main(argv: list[str] | None = None) -> int:
                     faults = ", ".join(d.fault_names) or "none"
                     print(f"{axis:5s} current {d.current_ma} mA   load {d.load}   "
                           f"{'STALLED' if d.stalled else 'not stalled'}   faults: {faults}")
+            elif args.cmd == "stat":
+                s = head.stats()
+                print(f"events: {s['posted']} raised, {s['dropped']} lost, most waiting {s['high_water']} of 16")
+                print(f"control loop: {s['late']} late passes, longest gap {s['worst_ms']} ms")
+            elif args.cmd == "seek":
+                head.seek_home(wait=True)
+                print("homed")
+            elif args.cmd == "dtc":
+                if args.clear:
+                    head.clear_trouble_codes()
+                    print("trouble codes cleared")
+                    return 0
+                troubles = head.trouble_codes()
+                if not troubles:
+                    print("no trouble recorded since power-up")
+                    return 0
+                now = head.clock()
+                for t in troubles:
+                    ago = ((now - t.last_ms) & 0xFFFFFFFF) / 1000.0
+                    where = f" on {t.axis}" if t.axis else ""
+                    extra = f" ({t.detail_text})" if t.detail_text else ""
+                    times = "once" if t.count == 1 else f"{t.count} times"
+                    print(f"{t.code:02d} {t.name}{where}: {t.what}{extra}")
+                    print(f"     {times}, last {ago:.1f} s ago. Check: {t.check}.")
             elif args.cmd == "selftest":
                 return _selftest(head, args)
             elif args.cmd == "cal":

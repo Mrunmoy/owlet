@@ -3,7 +3,10 @@
 # Depends on no protocol: protocols depend on it.
 
 set(OWLET_CORE_SRCS
+    src/AxisHoming.cpp
+    src/EventBus.cpp
     src/PanTilt.cpp
+    src/TroubleLog.cpp
     src/ControlLoop.cpp
     src/Calibrator.cpp
     src/CalibrationCodec.cpp

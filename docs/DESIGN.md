@@ -81,7 +81,7 @@ The tilt pair is deliberately not `STEP`, `DIR` in pin order: that is how the re
 ```mermaid
 flowchart TB
     APP["Composition roots · apps/esp32-owlet, apps/pico-owlet, apps/host-sim<br/>construct and inject; no logic"]
-    LOOP["ControlLoop<br/>tick → onTick → feed input"]
+    LOOP["ControlLoop<br/>tick → events → onTick → feed input"]
 
     subgraph PROTOS["Protocols · implement IProtocol"]
         direction LR
@@ -153,7 +153,8 @@ There are three places to swap something, and each is one class or one folder:
 | `core::IPanTilt` | `owlet_core` | Everything a protocol may ask of the head: enable/disable, move/nudge/home/stop, speed, pose, limits, state. `PanTilt` implements it over any two `IAxis`. |
 | `core::ICalibration` | `owlet_core` | Read, set, save and reset per-axis calibration. Implemented by `Calibrator`, which validates and enforces the enabled/disabled rules. |
 | `core::ICalibrationStore` | `owlet_core` | Persistence for calibration (NVS on ESP32, a flash sector on the Pico, a file in the simulator, a fake in tests). |
-| `core::ITickable` | `owlet_core` | `tick(dtMs) → TickStatus`: advance motion and report events (bus fault, watchdog trip). Only the loop calls it, never a protocol. |
+| `core::ITickable` | `owlet_core` | `tick(dtMs) → TickStatus`: advance motion by elapsed time. Only the loop calls it, never a protocol. |
+| `core::IEventSink` / `core::IEventObserver` | `owlet_core` | Where a change is announced, and who reacts to it. `core::EventBus` joins them (see §4.2 and [design/EVENT_DRIVEN.md](design/EVENT_DRIVEN.md)). |
 | `core::IProtocol` | `owlet_core` | A wire protocol: `claims()` / `consume()` / `begin()` / `onTick()` (see §4.3). |
 
 The SOLID principles map onto this as follows:
@@ -176,8 +177,9 @@ Rules:
 `ControlLoop::service(nowMs)` runs on one task at a fixed rate chosen by the app: 100 Hz on the servo head (a servo only updates at 50 Hz), 500 Hz on the stepper head (each tick hands the pulse generator one 2 ms burst per axis; see §6.5).
 
 1. `ITickable::tick(dt)` with the **real** elapsed time. `PanTilt` caps each motion step at 100 ms itself, so a starved loop resumes without lurching, while the watchdog still measures wall time.
-2. `IProtocol::onTick(nowMs, status)` lets the protocol emit time-driven output: arrival events, position streams, watchdog and bus-fault reports.
-3. At most 4 × 64-byte chunks are read from `IByteSource` and handed to `IProtocol::consume()`, so a flood of input can't stall motion or the watchdog. That's 25 KB/s, far beyond what the protocol needs. Replies are written synchronously to the protocol's `IByteSink`.
+2. `EventBus::dispatch()` delivers what that step announced (arrival, watchdog, bus fault) to every observer, in the order they were attached. `TextProtocol` is one, and writes `$ARRIVED`, `$TIMEOUT` and `$ERR,BUS` in answer.
+3. `IProtocol::onTick(nowMs)` lets the protocol emit output driven by time alone: the position stream.
+4. At most 4 × 64-byte chunks are read from `IByteSource` and handed to `IProtocol::consume()`, so a flood of input can't stall motion or the watchdog. That's 25 KB/s, far beyond what the protocol needs. Replies are written synchronously to the protocol's `IByteSink`.
 
 Motion is ticked before input is read, so a reply is never preceded by an event caused by the request it answers. One task owns all state, so nothing needs a mutex.
 
@@ -190,7 +192,7 @@ class IProtocol {
     virtual bool claims(uint8_t byte, bool atLineStart) const = 0;  // may I own the stream from here?
     virtual ConsumeResult consume(const uint8_t* data, std::size_t len) = 0;
     virtual void begin(uint32_t nowMs) = 0;                          // boot banner
-    virtual void onTick(uint32_t nowMs, const TickStatus& status) = 0;
+    virtual void onTick(uint32_t nowMs) = 0;                         // time-driven output
 };
 ```
 
@@ -262,7 +264,7 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 
 | Request                     | Success reply                         | Notes |
 |-----------------------------|---------------------------------------|-------|
-| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.4.0` |
+| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.5.0` |
 | `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both servos at their last known position (initially 0,0). No-op if already enabled. |
 | `$ENABLE,<pan>,<tilt>`      | `$ACK,ENABLE`                         | Energise at the given pose (snap). If already enabled, this is a slewed move and earns an `$ARRIVED`. |
 | `$DISABLE`                  | `$ACK,DISABLE`                        | PWM off; servos go limp. Target is kept. |
@@ -379,6 +381,32 @@ $DIAG,TILT           → $DIAG,TILT,N,0,0,0,0
 **Where it comes from on the stepper head.** Each TMC2209's `PDN/UART` pin is on its own Pico UART (TX and RX joined at the pin). `Tmc2209` speaks the chip's datagrams (sync, address, register, CRC-8); `Tmc2209Monitor` gives it at most one exchange every 100 ms from the control loop, about 1 ms each. When a driver first answers, the monitor configures it: current from the registers instead of the potentiometer (458 mA run, about 250 mA hold), microsteps from the register instead of MS1/MS2, StealthChop on. If the chip restarts because its supply dipped, it is configured again. Until a driver answers, and whenever it stops, that axis simply runs standalone from the MS pins and the potentiometer, at the same 1/16, so the head never depends on the link.
 
 The values are read on a timer today. Turning changes in them into pushed events, so that neither the firmware nor the PC has to ask, is planned (see `docs/design/`).
+
+### 5.8 Events
+
+```
+$EVT,ONLINE,PAN,0        $EVT,FAULT,TILT,6        $EVT,BUSOK,-,0        $EVT,OVERFLOW,-,3
+     <name>, <PAN|TILT|->, <arg>
+$EVENTS,0  → $ACK,EVENTS                 turn the $EVT lines off (1 = on, the power-up state)
+$STAT      → $STAT,<posted>,<dropped>,<high water>,<late passes>,<longest pass ms>
+```
+
+Anything the head notices that does not already have a line of its own is reported as `$EVT`. The names and their arguments are listed in the README. `$ARRIVED`, `$TIMEOUT,VEL` and `$ERR,BUS` are unchanged and are never repeated as `$EVT`; `$EVENTS,0` does not silence them.
+
+These were added in firmware 0.5.0 without a protocol version change. A client that predates them sees lines it does not expect, which the reference client has always passed to its event hook and otherwise ignored; a client talking to older firmware gets `$ERR,UNK` for `$EVENTS` and `$STAT`.
+
+`$STAT` is for judging the head's health. `dropped` should stay 0, and `high water` shows how close the event queue has come to its 16 places. `late passes` counts control-loop passes that began more than a millisecond late, and `longest pass` is the worst gap seen; a flash write shows up there, which is why `$CAL,SAVE` is refused while the head is moving. How events are raised and delivered inside the firmware is in [design/EVENT_DRIVEN.md](design/EVENT_DRIVEN.md).
+
+### 5.9 Trouble codes
+
+```
+$DTC          → $DTC,2
+$DTC,0        → $DTC,0,21,TILT,2,6,1000,1510
+                 <index>, <code>, <PAN|TILT|->, <times>, <detail>, <first ms>, <last ms>
+$DTC,CLEAR    → $ACK,DTC
+```
+
+`core::TroubleLog` is one more observer on the event bus. It keeps one record for each kind of trouble on each axis, in a fixed table of 16, and a repeat raises the count instead of adding a record, so the table cannot fill in normal use. It costs nothing until asked. The codes and their meanings are in the README; a number is never reused. An index past the end is `$NAK,DTC,RNG`. Added in firmware 0.5.0 without a protocol version change.
 
 ## 6. Behaviour
 

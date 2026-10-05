@@ -526,3 +526,188 @@ TEST(Tmc2209Standalone, MicrostepPinsFollowTheDatasheetTable)
     // 200 full steps, 1/16, 3:1 belt: 9600 per turn of the output.
     EXPECT_FLOAT_EQ(::owlet::tmc2209::stepsPerDegree(200, Microsteps::k16, 3.0f), 9600.0f / 360.0f);
 }
+
+// ── Limit switches and halting ──────────────────────────────────────────────
+
+namespace
+{
+
+class FakeSwitch final : public ::owlet::hal::IDigitalInput
+{
+public:
+    [[nodiscard]] bool active() const override
+    {
+        return pressed;
+    }
+    bool pressed{false};
+};
+
+struct SwitchRig
+{
+    SwitchRig() : axis(gen, enable, beltConfig(), StepperAxis::LimitSwitches{&minSwitch, &maxSwitch})
+    {
+        EXPECT_TRUE(axis.engageAt(0.0f));
+    }
+
+    void run(int ticks)
+    {
+        for (int i = 0; i < ticks; ++i)
+        {
+            (void)axis.tick(kTickMs);
+        }
+    }
+
+    FakeStepGenerator gen;
+    FakeDigitalOutput enable;
+    FakeSwitch minSwitch;
+    FakeSwitch maxSwitch;
+    StepperAxis axis;
+};
+
+} // namespace
+
+TEST(StepperLimits, APressedSwitchStopsStepsTowardItAtOnce)
+{
+    SwitchRig r;
+    r.axis.setTarget(60.0f);
+    r.run(100);
+    ASSERT_TRUE(r.axis.moving());
+    const int64_t before = r.gen.total;
+    ASSERT_GT(before, 0);
+
+    r.maxSwitch.pressed = true;
+    r.run(50);
+    EXPECT_EQ(r.gen.total, before) << "not one more step, and no braking ramp";
+    EXPECT_TRUE(r.axis.blocked());
+    EXPECT_FALSE(r.axis.moving()) << "the move is abandoned, not paused";
+    EXPECT_FLOAT_EQ(r.axis.targetDeg(), r.axis.positionDeg());
+
+    r.maxSwitch.pressed = false;
+    r.run(50);
+    EXPECT_EQ(r.gen.total, before) << "releasing the switch does not restart the move";
+}
+
+TEST(StepperLimits, StepsAwayFromAPressedSwitchAreAllowed)
+{
+    SwitchRig r;
+    r.maxSwitch.pressed = true;
+    r.axis.setTarget(-10.0f);
+    r.run(2000);
+    EXPECT_FALSE(r.axis.blocked());
+    EXPECT_NEAR(r.axis.positionDeg(), -10.0f, 0.05f);
+}
+
+TEST(StepperLimits, EachSwitchGuardsItsOwnDirection)
+{
+    SwitchRig r;
+    r.minSwitch.pressed = true;
+    r.axis.setTarget(-10.0f);
+    r.run(100);
+    EXPECT_EQ(r.gen.total, 0);
+    EXPECT_TRUE(r.axis.blocked());
+
+    r.axis.setTarget(10.0f);
+    r.run(2000);
+    EXPECT_NEAR(r.axis.positionDeg(), 10.0f, 0.05f);
+}
+
+TEST(StepperLimits, VelocityModeIsStoppedTheSameWay)
+{
+    SwitchRig r;
+    r.axis.setVelocity(30.0f);
+    r.run(100);
+    r.maxSwitch.pressed = true;
+    const int64_t before = r.gen.total;
+    r.run(100);
+    EXPECT_EQ(r.gen.total, before);
+    EXPECT_FALSE(r.axis.inVelocityMode());
+}
+
+TEST(StepperLimits, AReversedAxisStillGuardsTheLogicalDirection)
+{
+    StepperAxis::Config cfg = beltConfig();
+    cfg.reversed = true;
+    FakeStepGenerator gen;
+    FakeDigitalOutput enable;
+    FakeSwitch minSwitch;
+    FakeSwitch maxSwitch;
+    StepperAxis axis(gen, enable, cfg, StepperAxis::LimitSwitches{&minSwitch, &maxSwitch});
+    ASSERT_TRUE(axis.engageAt(0.0f));
+    maxSwitch.pressed = true; // the switch at the + end, whichever way the motor turns
+    axis.setTarget(10.0f);
+    for (int i = 0; i < 100; ++i)
+    {
+        (void)axis.tick(kTickMs);
+    }
+    EXPECT_EQ(gen.total, 0);
+}
+
+TEST(StepperLimits, AnAxisWithoutSwitchesIsUnaffected)
+{
+    Rig r;
+    ASSERT_TRUE(r.axis.engageAt(0.0f));
+    r.axis.setTarget(10.0f);
+    r.settle();
+    EXPECT_FALSE(r.axis.blocked());
+    EXPECT_NEAR(r.axis.positionDeg(), 10.0f, 0.05f);
+}
+
+TEST(StepperHalt, PulsesHaltedFromOutsideEndTheMoveAndTheAxisRecovers)
+{
+    Rig r;
+    ASSERT_TRUE(r.axis.engageAt(0.0f));
+    r.axis.setTarget(60.0f);
+    for (int i = 0; i < 50; ++i)
+    {
+        ASSERT_TRUE(r.axis.tick(kTickMs));
+    }
+    ASSERT_TRUE(r.axis.moving());
+    r.gen.halt(); // what a limit switch's interrupt does
+    const int64_t before = r.gen.total;
+
+    EXPECT_TRUE(r.axis.tick(kTickMs)) << "an expected kind of stop, not a hardware fault";
+    EXPECT_TRUE(r.axis.blocked());
+    EXPECT_FALSE(r.axis.moving()) << "the move is over";
+    EXPECT_FALSE(r.gen.halted()) << "the generator is usable again";
+    for (int i = 0; i < 50; ++i)
+    {
+        (void)r.axis.tick(kTickMs);
+    }
+    EXPECT_EQ(r.gen.total, before) << "and nothing restarts by itself";
+
+    r.axis.setTarget(-5.0f); // it can be driven away
+    r.settle();
+    EXPECT_FALSE(r.axis.blocked());
+}
+
+TEST(StepperHalt, HaltStopsDeadWhereStopWouldBrake)
+{
+    Rig r;
+    ASSERT_TRUE(r.axis.engageAt(0.0f));
+    r.axis.setTarget(60.0f);
+    for (int i = 0; i < 100; ++i)
+    {
+        (void)r.axis.tick(kTickMs);
+    }
+    const int64_t before = r.gen.total;
+    r.axis.halt();
+    for (int i = 0; i < 100; ++i)
+    {
+        (void)r.axis.tick(kTickMs);
+    }
+    EXPECT_EQ(r.gen.total, before);
+    EXPECT_FALSE(r.axis.blocked()) << "a commanded halt is not a physical obstruction";
+}
+
+TEST(StepperHalt, EngagingAfreshClearsTheBlockedMark)
+{
+    Rig r;
+    ASSERT_TRUE(r.axis.engageAt(0.0f));
+    r.axis.setTarget(10.0f);
+    (void)r.axis.tick(kTickMs);
+    r.gen.halt();
+    (void)r.axis.tick(kTickMs);
+    ASSERT_TRUE(r.axis.blocked());
+    ASSERT_TRUE(r.axis.engageAt(0.0f));
+    EXPECT_FALSE(r.axis.blocked());
+}

@@ -8,6 +8,7 @@ pico-sdk implementations of the HAL interfaces declared in `drivers/owlet_hal/`,
 - `PicoDigitalOutput`: `IDigitalOutput` on a GPIO, with the polarity (active high or low) set here. The pin is driven to its off level before it becomes an output.
 - `PicoStepProgram` + `PicoStepGenerator`: `IStepGenerator` on PIO. One ten-instruction program per PIO block, one state machine per motor.
 - `PicoFlashCalibrationStore`: `ICalibrationStore` in the last sector of the on-board flash.
+- `PicoHalfDuplexUart`: `IHalfDuplexLink` on a hardware UART whose TX and RX pins share one wire (a TMC2209's `PDN/UART`). TX only drives the line while sending; the echo of what was sent is read back and dropped; a 1 ms silence follows every exchange, because the chip ignores a request that comes too soon after the last.
 
 ## Step pulses
 

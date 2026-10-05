@@ -63,13 +63,16 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 | `GP6`, `GP7` | tilt driver `DIR`, `STEP` | PIO state machine 1 (as built: the reverse of the pan pair) |
 | `GP8` | `EN` on both drivers | active low; high (off) from reset until `ENABLE` |
 | `GP12`, `GP13` | `MS1`, `MS2` on both drivers | microstep select |
+| `GP4` + `GP5` | `PDN/UART` on the pan driver | TMC2209 UART (TX + RX on one line): current, microsteps, status |
+| `GP0` + `GP1` | `PDN/UART` on the tilt driver | as above; a private line per driver, so no addressing is needed |
+| `GP25` | the LED on the board | heartbeat: one short flash a second while the control loop runs |
 | `GP22` | `3V3` → resistor → LED → `GP22` | the pin sinks the LED (low = lit) while the head is moving |
 
 The tilt pair is deliberately not `STEP`, `DIR` in pin order: that is how the reference head was wired, and the firmware follows the hardware.
 | `3V3(OUT)` | `VIO` on both drivers | logic supply |
 | USB | PC | **protocol** only (no console anywhere) |
 
-`GP4`/`GP5` are kept free for the TMC2209 UART and `GP10`/`GP11` for home sensors. The drawing and the driver pinout are in [`wiring/pico-tmc2209/`](wiring/pico-tmc2209/README.md); the printable mechanism is in [`../mechanical/stepper-head/`](../mechanical/stepper-head/). The pin map and the motion limits are constants at the top of `apps/pico-owlet/main.cpp`.
+`GP10`/`GP11` are kept free for home sensors. The drawing and the driver pinout are in [`wiring/pico-tmc2209/`](wiring/pico-tmc2209/README.md); the printable mechanism is in [`../mechanical/stepper-head/`](../mechanical/stepper-head/). The pin map and the motion limits are constants at the top of `apps/pico-owlet/main.cpp`.
 
 ## 4. Software architecture
 
@@ -259,7 +262,7 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 
 | Request                     | Success reply                         | Notes |
 |-----------------------------|---------------------------------------|-------|
-| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.3.0` |
+| `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.4.0` |
 | `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both servos at their last known position (initially 0,0). No-op if already enabled. |
 | `$ENABLE,<pan>,<tilt>`      | `$ACK,ENABLE`                         | Energise at the given pose (snap). If already enabled, this is a slewed move and earns an `$ARRIVED`. |
 | `$DISABLE`                  | `$ACK,DISABLE`                        | PWM off; servos go limp. Target is kept. |
@@ -355,6 +358,27 @@ At boot the device loads the saved calibration if there is a valid one (versione
 **Re-pulsing while disabled.** The horn doesn't move while limp, so when an axis's pulses change, its position estimate is re-derived from the last pulse it was actually sent. If that puts the horn outside the (possibly new) limits, a bare `ENABLE` is refused with `NAK,ENABLE,RNG`, because energising "where it is" would snap it to the limit. Use `ENABLE,<pan>,<tilt>` to choose the pose explicitly. The same applies when the horn's last pulse lies beyond the new pulse range: its angle is then *unknown* (until the next explicit pose), and `$POS` meanwhile shows the nearest representable angle (±90°), not a measurement. The record format lives in host-tested code (`CalibrationCodec`), so only the NVS read/write itself is platform-specific.
 
 **Other motor types.** The wire format and the stored record are motor-neutral: three "drive" numbers and two limits per axis. The rules above are the *servo's* (its drive numbers are pulse widths); each axis type validates its own. The stepper head reports its drive numbers as `0,0,0` and refuses anything else with `NAK,CAL,RNG`; only its limits are adjustable, within the travel compiled into the app (pan ±170°, tilt ±90°), and a limits change never needs the head disabled. Its `$CAPS` reports the stepper's own speed range (for example `$CAPS,1.0,120.0,120.0,50,5000,50`), which is why clients must read `$CAPS` instead of assuming 500 °/s. `$CAL,SAVE` on the Pico erases and rewrites a flash sector, which pauses the control loop for some tens of milliseconds, so save while the head is at rest.
+
+### 5.7 Driver diagnostics
+
+```
+$DIAG,PAN            → $DIAG,PAN,U,0,0,146,458
+$DIAG,TILT           → $DIAG,TILT,N,0,0,0,0
+                        <U|N>, <faults>, <stalled 0|1>, <load>, <run current mA>
+```
+
+`U` means the axis's motor driver is answering on its data link and the numbers are live. `N` means there is nothing to report: the head has no such link (the servo head), or the driver is silent (on the stepper head, its motor supply is off). The other fields are then zero. A head always answers; the command was added in firmware 0.4.0 without a protocol version change, so older firmware replies `$ERR,UNK`.
+
+| Field | Meaning |
+|-------|---------|
+| faults | bit mask: 1 over-temperature warning, 2 over-temperature shutdown, 4 short on coil A, 8 short on coil B, 16 coil A open, 32 coil B open. The open-coil bits are only meaningful while the motor is moving. |
+| stalled | 1 if the load value is at or below twice the driver's stall threshold while moving. Always 0 while the threshold is 0, which is the shipped setting. |
+| load | the driver's own load measure. On a TMC2209 it is StallGuard's `SG_RESULT`, 0..510: **high when the motor runs free, falling as it is loaded**, and it rises with speed, so one threshold does not fit all speeds. Meaningless at standstill. |
+| run current | the RMS motor current the driver is set to, in mA. It is a setting, not a measurement. |
+
+**Where it comes from on the stepper head.** Each TMC2209's `PDN/UART` pin is on its own Pico UART (TX and RX joined at the pin). `Tmc2209` speaks the chip's datagrams (sync, address, register, CRC-8); `Tmc2209Monitor` gives it at most one exchange every 100 ms from the control loop, about 1 ms each. When a driver first answers, the monitor configures it: current from the registers instead of the potentiometer (458 mA run, about 250 mA hold), microsteps from the register instead of MS1/MS2, StealthChop on. If the chip restarts because its supply dipped, it is configured again. Until a driver answers, and whenever it stops, that axis simply runs standalone from the MS pins and the potentiometer, at the same 1/16, so the head never depends on the link.
+
+The values are read on a timer today. Turning changes in them into pushed events, so that neither the firmware nor the PC has to ask, is planned (see `docs/design/`).
 
 ## 6. Behaviour
 

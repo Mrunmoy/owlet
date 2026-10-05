@@ -115,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     wd.add_argument("ms", nargs="?", type=int)
     sub.add_parser("clock", help="print the device clock (ms since boot)")
     sub.add_parser("caps", help="print the head's capabilities")
+    sub.add_parser("diag", help="print what the motor drivers report: faults, load, current")
     cal = sub.add_parser("cal", help="show or change the calibration stored on the device")
     cal.add_argument("target", nargs="?", choices=["pan", "tilt", "save", "reset"],
                      help="axis to show/change, or save/reset (default: show both axes)")
@@ -182,6 +183,15 @@ def main(argv: list[str] | None = None) -> int:
                       f"velocity max {c.velocity_max:.1f} deg/s")
                 print(f"watchdog {c.watchdog_min_ms}..{c.watchdog_max_ms} ms (0 = off)   "
                       f"stream max {c.stream_max_hz} Hz")
+            elif args.cmd == "diag":
+                for axis in ("pan", "tilt"):
+                    d = head.diag(axis)
+                    if not d.available:
+                        print(f"{axis:5s} no driver data (no data link, or the motor supply is off)")
+                        continue
+                    faults = ", ".join(d.fault_names) or "none"
+                    print(f"{axis:5s} current {d.current_ma} mA   load {d.load}   "
+                          f"{'STALLED' if d.stalled else 'not stalled'}   faults: {faults}")
             elif args.cmd == "cal":
                 return _cal(head, args)
             elif args.cmd == "watch":

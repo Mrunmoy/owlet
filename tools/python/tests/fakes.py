@@ -81,6 +81,9 @@ def default_responder(s):
         return [f"CLOCK,{ms}"]
     if s.name == "CAPS":
         return ["CAPS,1.0,500.0,500.0,50,5000,50"]
+    if s.name == "DIAG":
+        return [f"DIAG,{s.fields[0]},U,6,1,37,459" if s.fields[0] == "PAN"
+                else f"DIAG,{s.fields[0]},N,0,0,0,0"]
     if s.name == "POS":
         return [f"POS,0.0,0.0,0.0,0.0,H,{ms}"]
     if s.name in ("WATCHDOG", "STREAM", "VEL", "STOP", "ENABLE", "DISABLE", "MOVE"):

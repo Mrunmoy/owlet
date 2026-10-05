@@ -1,170 +1,185 @@
 #!/usr/bin/env python3
-"""Generates wiring.svg: Raspberry Pi Pico + 2x TMC2209 StepStick + 2x NEMA 17."""
+"""Generates wiring.svg: Raspberry Pi Pico (top view) + 2x TMC2209 StepStick.
 
-W, H = 1240, 985
-C = dict(v12="#d62728", gnd="#111111", v33="#ff8c00", led="#e6b800", step="#1f77b4", ms1="#8c564b", ms2="#e377c2",
-         dir="#2ca02c", en="#9467bd", coil="#7f7f7f", nc="#aaaaaa")
+    python3 make_wiring.py && convert -density 110 wiring.svg wiring.png
+
+The pin map here must match the constants at the top of apps/pico-owlet/main.cpp.
+"""
+
+W, H = 1560, 1500
+C = dict(v12="#d62728", gnd="#222222", v33="#e8890c", step="#1f77b4", dir="#2ca02c",
+         en="#8a56c2", ms1="#8c564b", ms2="#d6519f", uart="#149aa8", led="#c9a100",
+         coil="#888888", off="#aaaaaa")
 out = []
 
 
-def line(pts, col, w=3):
+def line(pts, col, w=5):
     d = " ".join(f"{x},{y}" for x, y in pts)
     out.append(f'<polyline points="{d}" fill="none" stroke="{col}" stroke-width="{w}" '
                f'stroke-linejoin="round" stroke-linecap="round"/>')
 
 
-def dot(x, y, col):
-    out.append(f'<circle cx="{x}" cy="{y}" r="5.5" fill="{col}"/>')
+def dot(x, y, col, r=7):
+    out.append(f'<circle cx="{x}" cy="{y}" r="{r}" fill="{col}"/>')
 
 
-def text(x, y, s, size=14, anchor="start", col="#111", weight="normal"):
+def text(x, y, s, size=18, anchor="start", col="#222", weight="normal"):
     out.append(f'<text x="{x}" y="{y}" font-size="{size}" text-anchor="{anchor}" '
                f'fill="{col}" font-weight="{weight}">{s}</text>')
 
 
-def box(x, y, w, h, fill, stroke="#333", rx=8):
+def box(x, y, w, h, fill, stroke="#333", rx=12):
     out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" '
-               f'stroke="{stroke}" stroke-width="2"/>')
+               f'stroke="{stroke}" stroke-width="3"/>')
 
 
-# ── Pico ────────────────────────────────────────────────────────
-PX0, PX1 = 50, 260
-box(PX0, 140, PX1 - PX0, 620, "#f7d6e3")
-text(155, 172, "Raspberry Pi Pico", 17, "middle", weight="bold")
-text(155, 192, "(USB-C clone, RP2040)", 13, "middle")
-box(115, 112, 80, 30, "#cccccc", rx=4)
-text(155, 132, "USB to PC", 12, "middle")
-pico = {"3V3": (230, "3V3(OUT)  pin 36"), "GP2": (336, "GP2  pin 4"), "GP3": (372, "GP3  pin 5"),
-        "GP12": (446, "GP12  pin 16"), "GP13": (464, "GP13  pin 17"),
-        "GP8": (500, "GP8  pin 11"), "GP6": (600, "GP6  pin 9"), "GP7": (636, "GP7  pin 10"),
-        "GP22": (678, "GP22  pin 29"),
-        "GND": (720, "GND  pin 38")}
-for k, (y, label) in pico.items():
-    text(PX1 - 10, y + 5, label, 14, "end")
-    out.append(f'<circle cx="{PX1}" cy="{y}" r="4" fill="#333"/>')
+# ── Pico, top view, USB at the top ──────────────────────────────
+LEFT = ["GP0", "GP1", "GND", "GP2", "GP3", "GP4", "GP5", "GND", "GP6", "GP7",
+        "GP8", "GP9", "GND", "GP10", "GP11", "GP12", "GP13", "GND", "GP14", "GP15"]      # pins 1..20
+RIGHT = ["VBUS", "VSYS", "GND", "3V3_EN", "3V3", "ADC_VREF", "GP28", "AGND", "GP27", "GP26",
+         "RUN", "GP22", "GND", "GP21", "GP20", "GP19", "GP18", "GND", "GP17", "GP16"]    # pins 40..21
+PX0, PX1, PY0, PITCH = 300, 560, 230, 36
 
-# ── Drivers (top view: potentiometer / heatsink side up) ────────
-DX0, DX1 = 560, 760
-LEFT = ["EN", "MS1", "MS2", "PDN", "UART", "CLK", "STEP", "DIR"]
-RIGHT = ["VM", "GND", "A2", "A1", "B1", "B2", "VIO", "GND"]
+
+def ly(pin):        # y of a left-row pin, by pin number 1..20
+    return PY0 + (pin - 1) * PITCH
+
+
+def ry(pin):        # y of a right-row pin, by pin number 40..21
+    return PY0 + (40 - pin) * PITCH
+
+
+# net colour for each used Pico pin
+USED_L = {1: "uart", 2: "uart", 4: "step", 5: "dir", 6: "uart", 7: "uart", 9: "dir",
+          10: "step", 11: "en", 16: "ms1", 17: "ms2"}
+USED_R = {38: "gnd", 36: "v33", 29: "led"}
+
+box(PX0, PY0 - 42, PX1 - PX0, 19 * PITCH + 84, "#f6d5e2")
+box(PX0 + 85, PY0 - 78, 90, 56, "#dddddd", rx=10)
+text(PX0 + 130, PY0 - 43, "USB-C", 19, "middle", weight="bold")
+for i, name in enumerate(LEFT):
+    pin, y = i + 1, PY0 + i * PITCH
+    col = C[USED_L[pin]] if pin in USED_L else C["off"]
+    wt = "bold" if pin in USED_L else "normal"
+    dot(PX0, y, col, 6)
+    text(PX0 + 14, y + 6, f"{pin:02d}  {name}", 17, "start", col, wt)
+for i, name in enumerate(RIGHT):
+    pin, y = 40 - i, PY0 + i * PITCH
+    col = C[USED_R[pin]] if pin in USED_R else C["off"]
+    wt = "bold" if pin in USED_R else "normal"
+    dot(PX1, y, col, 6)
+    text(PX1 - 14, y + 6, f"{name}  {pin}", 17, "end", col, wt)
+text((PX0 + PX1) / 2, PY0 + 19 * PITCH + 70, "Left row: count from USB downward", 15, "middle", "#555")
+
+# ── Drivers, top view (pot side up) ─────────────────────────────
+DX0, DX1, DP = 1000, 1240, 38
+DL = ["EN", "MS1", "MS2", "PDN", "UART", "CLK", "STEP", "DIR"]
+DR = ["VM", "GND", "A2", "A1", "B1", "B2", "VIO", "GND"]
 
 
 def driver(y0, name):
-    box(DX0, y0 - 30, DX1 - DX0, 312, "#e8e8f5")
-    text(660, y0 + 118, name, 16, "middle", weight="bold")
-    text(660, y0 + 138, "TMC2209", 13, "middle")
-    text(660, y0 + 156, "top view", 12, "middle", "#555")
-    text(660, y0 + 172, "(pot side up)", 12, "middle", "#555")
-    ys = [y0 + 36 * i for i in range(8)]
-    for i, y in enumerate(ys):
-        lc = C["nc"] if LEFT[i] in ("PDN", "UART", "CLK") else "#111"
-        text(DX0 + 10, y + 5, LEFT[i], 13, "start", lc)
-        text(DX1 - 10, y + 5, RIGHT[i], 13, "end")
-        out.append(f'<circle cx="{DX0}" cy="{y}" r="4" fill="#333"/>')
-        out.append(f'<circle cx="{DX1}" cy="{y}" r="4" fill="#333"/>')
-    return dict(zip(LEFT, ys)), dict(zip(["VM", "GND1", "A2", "A1", "B1", "B2", "VIO", "GND2"], ys))
+    box(DX0, y0 - 30, DX1 - DX0, 7 * DP + 60, "#e8e8f5")
+    text((DX0 + DX1) / 2, y0 + 128, name, 26, "middle", weight="bold")
+    text((DX0 + DX1) / 2, y0 + 154, "TMC2209", 16, "middle")
+    text((DX0 + DX1) / 2, y0 + 174, "pot side up", 14, "middle", "#555")
+    L, R = {}, {}
+    for i in range(8):
+        y = y0 + i * DP
+        grey = DL[i] in ("UART", "CLK")
+        dot(DX0, y, C["off"] if grey else "#333", 6)
+        dot(DX1, y, "#333", 6)
+        text(DX0 + 14, y + 6, DL[i], 16, "start", C["off"] if grey else "#222")
+        text(DX1 - 14, y + 6, DR[i], 16, "end")
+        L[DL[i]] = y
+        R[f"{DR[i]}{i}"] = y
+    return L, R
 
 
-panL, panR = driver(120, "PAN driver")
-tiltL, tiltR = driver(530, "TILT driver")
+panL, panR = driver(220, "PAN")
+tiltL, tiltR = driver(670, "TILT")
 
-X12, XG, X33, XEN, XVIO = 810, 880, 470, 330, 785
+# ── Signal nets: out of the left row, round the bottom, up to the drivers ──
+# Outermost first, so the loops nest without crossing on the left and bottom.
+NETS = [
+    # colour, Pico pins, label,                      driver pins (pan, tilt)
+    ("uart", (1, 2),  "GP0 + GP1  →  TILT PDN (UART)", (None, "PDN")),
+    ("step", (4,),    "GP2  →  PAN STEP",              ("STEP", None)),
+    ("dir",  (5,),    "GP3  →  PAN DIR",               ("DIR", None)),
+    ("uart", (6, 7),  "GP4 + GP5  →  PAN PDN (UART)",  ("PDN", None)),
+    ("dir",  (9,),    "GP6  →  TILT DIR",              (None, "DIR")),
+    ("step", (10,),   "GP7  →  TILT STEP",             (None, "STEP")),
+    ("en",   (11,),   "GP8  →  EN (both)",             ("EN", "EN")),
+    ("ms1",  (16,),   "GP12  →  MS1 (both)",           ("MS1", "MS1")),
+    ("ms2",  (17,),   "GP13  →  MS2 (both)",           ("MS2", "MS2")),
+]
+N = len(NETS)
+for k, (ckey, pins, label, (pan_pin, tilt_pin)) in enumerate(NETS):
+    col = C[ckey]
+    xl = 60 + k * 26                   # vertical run left of the Pico
+    yb = 1050 + (N - 1 - k) * 44       # lane along the bottom
+    xr = 892 - k * 26                  # riser left of the drivers
+    targets = [y for y in (panL.get(pan_pin), tiltL.get(tilt_pin)) if y is not None]
+    top = min(targets)
+    line([(PX0, ly(pins[0])), (xl, ly(pins[0])), (xl, yb), (xr, yb), (xr, top), (DX0, top)], col)
+    for extra in pins[1:]:             # a second Pico pin on the same net
+        line([(PX0, ly(extra)), (xl, ly(extra))], col)
+        dot(xl, ly(extra), col)
+    for y in targets:
+        if y != top:                   # branch to the second driver
+            line([(xr, y), (DX0, y)], col)
+            dot(xr, y, col)
+    text(330, yb - 9, label, 17, "start", col, "bold")
 
-# ── Power: 12 V and ground buses ────────────────────────────────
-line([(X12, 92), (X12, tiltR["VM"])], C["v12"], 4)
-line([(XG, 92), (XG, 890), (300, 890), (300, pico["GND"][0]), (PX1, pico["GND"][0])], C["gnd"], 4)
+# ── 3.3 V and ground, over the top so they cross no signal ──────
+X33, XG, X12 = 1272, 1302, 1440
+line([(PX1, ry(38)), (585, ry(38)), (585, 130), (XG, 130), (XG, 1030), (1340, 1030)], C["gnd"])
+line([(PX1, ry(36)), (610, ry(36)), (610, 152), (X33, 152), (X33, tiltR["VIO6"])], C["v33"])
+text(625, 122, "GND  →  common ground", 16, "start", C["gnd"], "bold")
+text(625, 176, "3.3 V  →  VIO", 16, "start", C["v33"], "bold")
 for R in (panR, tiltR):
-    line([(DX1, R["VM"]), (X12, R["VM"])], C["v12"]); dot(X12, R["VM"], C["v12"])
-    for g in ("GND1", "GND2"):
+    line([(DX1, R["VIO6"]), (X33, R["VIO6"])], C["v33"]); dot(X33, R["VIO6"], C["v33"])
+    for g in ("GND1", "GND7"):
         line([(DX1, R[g]), (XG, R[g])], C["gnd"]); dot(XG, R[g], C["gnd"])
-# capacitors across each driver's VM/GND
-for y in (92, 500):
-    line([(X12, y), (838, y)], C["v12"]); line([(852, y), (XG, y)], C["gnd"])
-    line([(838, y - 12), (838, y + 12)], "#111", 3); line([(852, y - 12), (852, y + 12)], "#111", 3)
-    text(832, y - 16, "+", 15, "end", C["v12"], "bold")
-    dot(X12, y, C["v12"]); dot(XG, y, C["gnd"])
-text(895, 72, "100 µF 25 V at each driver.", 13)
-text(895, 89, "Optional if the supply has a large", 13)
-text(895, 106, "output capacitor and short wires.", 13)
-# supply
-box(985, 425, 200, 80, "#fde9c9")
-text(1085, 452, "12 V DC supply", 15, "middle", weight="bold")
-text(1085, 472, "USB-C PD trigger board", 13, "middle")
-text(1085, 490, "set to 12 V, short wires", 13, "middle")
-line([(985, 445), (X12, 445)], C["v12"], 4); dot(X12, 445, C["v12"])
-line([(985, 485), (XG, 485)], C["gnd"], 4); dot(XG, 485, C["gnd"])
-text(975, 439, "+", 16, "end", C["v12"], "bold"); text(975, 503, "−", 16, "end", C["gnd"], "bold")
-
-# ── 3.3 V logic supply ──────────────────────────────────────────
-line([(PX1, pico["3V3"][0]), (X33, pico["3V3"][0])], C["v33"])
-line([(X33, pico["3V3"][0]), (X33, 870), (XVIO, 870), (XVIO, tiltR["VIO"]), (DX1, tiltR["VIO"])], C["v33"])
-line([(X33, 420), (XVIO, 420), (XVIO, panR["VIO"]), (DX1, panR["VIO"])], C["v33"]); dot(X33, 420, C["v33"])
-
-# ── Microstep select, shared by both drivers ────────────────────
-for key, gp, xt in (("MS1", "GP12", 500), ("MS2", "GP13", 530)):
-    col = C[key.lower()]
-    line([(PX1, pico[gp][0]), (xt, pico[gp][0])], col)
-    line([(DX0, panL[key]), (xt, panL[key]), (xt, tiltL[key]), (DX0, tiltL[key])], col)
-    dot(xt, pico[gp][0], col)
-
-# ── Signals ─────────────────────────────────────────────────────
-line([(PX1, pico["GP2"][0]), (DX0, panL["STEP"])], C["step"])
-line([(PX1, pico["GP3"][0]), (DX0, panL["DIR"])], C["dir"])
-# As built, the tilt pair is the other way round from the pan pair:
-# GP6 is DIR and GP7 is STEP.
-line([(PX1, pico["GP6"][0]), (400, pico["GP6"][0]), (400, tiltL["DIR"]), (DX0, tiltL["DIR"])], C["dir"])
-line([(PX1, pico["GP7"][0]), (370, pico["GP7"][0]), (370, tiltL["STEP"]), (DX0, tiltL["STEP"])], C["step"])
-yen = pico["GP8"][0]
-line([(PX1, yen), (XEN, yen)], C["en"])
-line([(DX0, panL["EN"]), (XEN, panL["EN"]), (XEN, tiltL["EN"]), (DX0, tiltL["EN"])], C["en"])
-dot(XEN, yen, C["en"])
-# EN pull-up
-line([(XEN, yen), (372, yen)], C["en"]); line([(428, yen), (X33, yen)], C["v33"]); dot(X33, yen, C["v33"])
-out.append(f'<rect x="372" y="{yen - 9}" width="56" height="18" fill="#fff" stroke="#111" stroke-width="2"/>')
-text(400, yen + 5, "10 kΩ", 12, "middle")
-text(400, yen + 26, "optional pull-up", 12, "middle", "#555")
-
-# ── Activity LED (3.3 V → resistor → LED → GP22; the pin sinks it) ──
-yl = pico["GP22"][0]
-# In the order it is built: 3.3 V, resistor, LED anode, LED cathode, pin.
-line([(PX1, yl), (273, yl)], C["led"])
-line([(273, yl - 9), (273, yl + 9)], "#111", 2.5)  # cathode bar, towards the pin
-out.append(f'<polygon points="290,{yl - 9} 290,{yl + 9} 274,{yl}" fill="{C["led"]}" stroke="#111" stroke-width="1.5"/>')
-line([(290, yl), (300, yl)], C["v33"])
-out.append(f'<rect x="300" y="{yl - 7}" width="28" height="14" fill="#fff" stroke="#111" stroke-width="2"/>')
-line([(328, yl), (344, yl), (344, yl + 8)], C["v33"])
-text(344, yl + 22, "3V3", 12, "middle", C["v33"], "bold")
-text(281, yl - 14, "LED", 11, "middle", "#555")
-text(314, yl - 12, "R", 11, "middle", "#555")
+    line([(DX1, R["VM0"]), (X12, R["VM0"])], C["v12"]); dot(X12, R["VM0"], C["v12"])
+line([(X12, panR["VM0"]), (X12, 1070), (1370, 1070)], C["v12"])
+text(1288, 1036, "Supply −  /  GND", 17, "end", C["gnd"], "bold")
+text(1360, 1076, "+12 V supply", 17, "end", C["v12"], "bold")
 
 # ── Motors ──────────────────────────────────────────────────────
-def motor(R, name):
-    y0 = R["A2"] - 26
-    box(985, y0, 170, 160, "#dddddd")
-    text(1070, y0 + 150, name, 14, "middle", weight="bold")
-    for k in ("A2", "A1", "B1", "B2"):
-        line([(DX1, R[k]), (985, R[k])], C["coil"])
-    text(995, R["A2"] + 23, "coil 1 (one wire pair)", 13)
-    text(995, R["B1"] + 23, "coil 2 (other pair)", 13)
+for R, name in ((panR, "PAN MOTOR"), (tiltR, "TILT MOTOR")):
+    for k in ("A22", "A13", "B14", "B25"):
+        line([(DX1, R[k]), (1380, R[k])], C["coil"])
+        text(1388, R[k] + 6, k[:2], 16)
+        text(1372, R["A22"] - 16, name, 15, "middle", weight="bold")
 
+# ── Activity LED: 3.3 V → resistor → LED → GP22 (the pin sinks it) ──
+yl = ry(29)
+line([(PX1, yl), (590, yl)], C["led"], 4)
+line([(590, yl - 10), (590, yl + 10)], "#111", 3)
+out.append(f'<polygon points="608,{yl - 10} 608,{yl + 10} 591,{yl}" fill="{C["led"]}" stroke="#111" stroke-width="1.5"/>')
+line([(608, yl), (620, yl)], C["v33"], 4)
+out.append(f'<rect x="620" y="{yl - 8}" width="30" height="16" fill="#fff" stroke="#111" stroke-width="2"/>')
+line([(650, yl), (664, yl)], C["v33"], 4)
+text(600, yl - 18, "LED", 12, "middle", "#555")
+text(635, yl - 14, "R", 12, "middle", "#555")
+text(640, yl + 28, "3V3", 13, "middle", C["v33"], "bold")
 
-motor(panR, "PAN motor (in base)")
-motor(tiltR, "TILT motor (on yoke)")
-
-# ── Labels and legend ───────────────────────────────────────────
-text(W / 2, 40, "Pan-tilt wiring: Pico + 2 × TMC2209 + 2 × NEMA 17", 22, "middle", weight="bold")
-text(W / 2, 62, "Wires join only where there is a dot. Grey driver pins (PDN, UART, CLK) stay unconnected.", 13,
-     "middle", "#444")
-lx, ly = 50, 780
-box(lx, ly, 262, 200, "#ffffff", "#999", 6)
-for i, (k, lab) in enumerate([("v12", "12 V motor power"), ("gnd", "Ground (all joined)"),
-                              ("v33", "3.3 V logic from Pico"), ("step", "STEP"), ("dir", "DIR"),
-                              ("ms1", "MS1 (shared)"), ("ms2", "MS2 (shared)"),
-                              ("en", "ENABLE (shared, active low)"), ("led", "Activity LED (pin sinks: low = lit)"),
-                              ("coil", "Motor coil wires")]):
-    y = ly + 18 + 18 * i
-    line([(lx + 12, y), (lx + 46, y)], C[k], 4)
-    text(lx + 56, y + 5, lab, 13)
+# ── Titles and notes ────────────────────────────────────────────
+text(W / 2, 52, "Pico → two TMC2209 drivers", 36, "middle", weight="bold")
+text(W / 2, 88, "TOP VIEW  •  components facing you  •  USB at the top", 20, "middle")
+nx, ny = 1260, 1160
+for i, (s, col, wt) in enumerate([
+        ("Crossing wires connect only at a dot.", "#222", "bold"),
+        ("12 V goes to VM only, never to the Pico.", "#222", "bold"),
+        ("EN is active LOW. The LED pin sinks: low = lit.", "#222", "normal"),
+        ("Tilt pair as built: GP6 = DIR, GP7 = STEP.", "#222", "normal"),
+        ("PDN (UART): one private line per driver, TX and RX", C["uart"], "normal"),
+        ("joined. Sets motor current, reads load and faults.", C["uart"], "normal"),
+        ("On-board LED (GP25, no wiring): heartbeat, one flash a second.", "#222", "normal"),
+                ("Motor: A1/A2 are one coil, B1/B2 the other.", "#222", "normal"),
+        ("Grey driver pins (UART, CLK) stay unconnected.", "#777", "normal"),
+        ("Optional: 100 µF 25 V across VM/GND at each driver.", "#777", "normal")]):
+    text(nx, ny + i * 28, s, 16, "middle", col, wt)
 
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
        f'font-family="DejaVu Sans, Arial, sans-serif"><rect width="{W}" height="{H}" fill="#ffffff"/>'

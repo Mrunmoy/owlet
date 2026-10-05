@@ -53,7 +53,7 @@ class EndToEndTest(unittest.TestCase):
 
     def test_handshake(self):
         self.assertEqual(self.head.protocol_version, 3)
-        self.assertEqual(self.head.firmware_version, "0.3.0")
+        self.assertEqual(self.head.firmware_version, "0.4.0")
 
     def test_boots_disabled_and_refuses_motion(self):
         self.assertFalse(self.head.position().enabled)
@@ -217,6 +217,12 @@ class EndToEndTest(unittest.TestCase):
         c = self.head.caps()
         self.assertEqual((c.speed_max, c.velocity_max, c.stream_max_hz), (500.0, 500.0, 50))
 
+    def test_a_head_without_driver_data_reports_none(self):
+        # The simulator is the servo head: its drivers have nothing to say.
+        d = self.head.diag("pan")
+        self.assertFalse(d.available)
+        self.assertEqual((d.faults, d.stalled, d.load, d.current_ma), (0, False, 0, 0))
+
     def test_calibration_persists_across_a_restart(self):
         self.head.set_reversed("tilt", True)
         self.head.set_limits("pan", -85, 90)
@@ -265,6 +271,7 @@ class EndToEndTest(unittest.TestCase):
                                   cwd=REPO / "tools/python")
         self.assertIn("protocol v3", cli("ping").stdout)
         self.assertIn("velocity max 500.0", cli("caps").stdout)
+        self.assertIn("no driver data", cli("diag").stdout)
         self.assertEqual(cli("cal", "tilt", "--reverse", "--limits", "-80", "85").returncode, 0)
         out = cli("cal").stdout
         self.assertIn("tilt", out)

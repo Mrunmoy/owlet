@@ -498,3 +498,70 @@ TEST(TextCalibration, ResetRestoresFactory)
               std::vector<std::string>{line("CAL,TILT,500,1500,2500,-90.0,90.0,N,F")});
     EXPECT_FALSE(r.store.hasRecord);
 }
+
+// ── Driver diagnostics ($DIAG) ──────────────────────────────────────────────
+
+#include "owlet/core/IDiagnostics.hpp"
+
+namespace
+{
+
+class FakeDiagnostics final : public ::owlet::core::IDiagnostics
+{
+public:
+    [[nodiscard]] ::owlet::hal::AxisDiagnostics read(::owlet::core::Axis axis) const override
+    {
+        return axis == ::owlet::core::Axis::Pan ? pan : tilt;
+    }
+
+    ::owlet::hal::AxisDiagnostics pan{};
+    ::owlet::hal::AxisDiagnostics tilt{};
+};
+
+} // namespace
+
+TEST(TextDiagnostics, AHeadWithNoDriverDataSaysSo)
+{
+    Rig r;  // built without a diagnostics source, like the servo head
+    EXPECT_EQ(r.send("DIAG,PAN"), std::vector<std::string>{line("DIAG,PAN,N,0,0,0,0")});
+    EXPECT_EQ(r.send("DIAG,TILT"), std::vector<std::string>{line("DIAG,TILT,N,0,0,0,0")});
+}
+
+TEST(TextDiagnostics, ReportsWhatTheDriverSays)
+{
+    FakeServoChannel                    panCh;
+    FakeServoChannel                    tiltCh;
+    Servo                               pan{panCh, Servo::Calibration{}};
+    Servo                               tilt{tiltCh, Servo::Calibration{}};
+    PanTilt                             head{pan, tilt};
+    FakeSerialPort                      port;
+    FakeClock                           clock{1000};
+    ::owlet::test::FakeCalibrationStore store;
+    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    FakeDiagnostics                     diag;
+    TextProtocol                        proto{port, head, calib, clock, "0.1.0", &diag};
+    ControlLoop                         loop{port, head, proto};
+    loop.begin(clock.t);
+    (void) port.takeLines();
+
+    diag.pan.available = true;
+    diag.pan.faults    = ::owlet::hal::AxisDiagnostics::kOverTemp | ::owlet::hal::AxisDiagnostics::kShortA;
+    diag.pan.stalled   = true;
+    diag.pan.load      = 37;
+    diag.pan.currentMa = 459;
+    port.rx += frame("DIAG,PAN");
+    loop.service(clock.t);
+    EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("DIAG,PAN,U,6,1,37,459")});
+
+    port.rx += frame("DIAG,TILT");  // tilt's driver is not answering
+    loop.service(clock.t);
+    EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("DIAG,TILT,N,0,0,0,0")});
+}
+
+TEST(TextDiagnostics, NeedsExactlyOneAxis)
+{
+    Rig r;
+    EXPECT_EQ(r.send("DIAG"), std::vector<std::string>{line("NAK,DIAG,FMT")});
+    EXPECT_EQ(r.send("DIAG,ROLL"), std::vector<std::string>{line("NAK,DIAG,FMT")});
+    EXPECT_EQ(r.send("DIAG,PAN,1"), std::vector<std::string>{line("NAK,DIAG,FMT")});
+}

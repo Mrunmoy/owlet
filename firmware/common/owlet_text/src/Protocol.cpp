@@ -50,7 +50,7 @@ constexpr uint8_t kArgs0  = 1U << 0;
 constexpr uint8_t kArgs1  = 1U << 1;
 constexpr uint8_t kArgs2  = 1U << 2;
 
-constexpr std::array<CommandSpec, 16> kCommands{{
+constexpr std::array<CommandSpec, 17> kCommands{{
     {"PING", Command::Ping, kArgs0, false},
     {"ENABLE", Command::Enable, kArgs0 | kArgs2, false},
     {"DISABLE", Command::Disable, kArgs0, false},
@@ -67,6 +67,7 @@ constexpr std::array<CommandSpec, 16> kCommands{{
     {"CLOCK", Command::Clock, kArgs0, false},
     {"CAPS", Command::Caps, kArgs0, false},
     {"CAL", Command::Cal, 0, false},  // parsed by parseCal()
+    {"DIAG", Command::Diag, 0, false},  // parsed by parseDiag()
 }};
 
 } // namespace
@@ -217,6 +218,17 @@ bool parseUnsigned(std::string_view text, uint32_t& out)
     return true;
 }
 
+// DIAG,<PAN|TILT>
+static RequestStatus parseDiag(const Sentence& s, Request& out)
+{
+    if (s.fieldCount != 1 || (s.fields[0] != "PAN" && s.fields[0] != "TILT"))
+    {
+        return RequestStatus::BadFormat;
+    }
+    out.token = s.fields[0];
+    return RequestStatus::Ok;
+}
+
 // CAL,<PAN|TILT|SAVE|RESET>  or  CAL,<PAN|TILT>,<min_us>,<center_us>,<max_us>,<min_deg>,<max_deg>
 static RequestStatus parseCal(const Sentence& s, Request& out)
 {
@@ -263,6 +275,10 @@ RequestStatus parseRequest(const Sentence& sentence, Request& out)
         if (spec.command == Command::Cal)
         {
             return parseCal(sentence, out);
+        }
+        if (spec.command == Command::Diag)
+        {
+            return parseDiag(sentence, out);
         }
         const std::size_t n = sentence.fieldCount;
         if (n > 2 || (spec.argCountMask & (1U << n)) == 0)

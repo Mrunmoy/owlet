@@ -50,3 +50,31 @@ TEST(ActivityIndicator, PassesTheWatchdogStatusThrough)
     ASSERT_EQ(head.setVelocity(10.0f, 0.0f), IPanTilt::Result::Ok);
     EXPECT_TRUE(indicator.tick(60).watchdogTripped);
 }
+
+// ── Heartbeat ───────────────────────────────────────────────────────────────
+
+#include "owlet/core/Heartbeat.hpp"
+
+TEST(Heartbeat, FlashesBrieflyOncePerPeriod)
+{
+    FakeDigitalOutput          led;
+    ::owlet::core::Heartbeat beat(led, 1000, 100);
+    int                        litTicks = 0;
+    for (int ms = 0; ms < 3000; ms += 2)
+    {
+        beat.poll(2);
+        litTicks += led.on ? 1 : 0;
+    }
+    EXPECT_NEAR(litTicks, 150, 3) << "lit for 100 ms of every 1000";
+    EXPECT_LE(led.writes, 8) << "written on change, not every pass";
+    EXPECT_GE(led.writes, 5);
+}
+
+TEST(Heartbeat, SurvivesAbsurdArguments)
+{
+    FakeDigitalOutput          led;
+    ::owlet::core::Heartbeat beat(led, 0, 100);  // zero period falls back to the default
+    beat.poll(0xFFFFFFFFu);
+    beat.poll(1);
+    SUCCEED();
+}

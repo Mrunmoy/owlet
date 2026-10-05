@@ -11,6 +11,7 @@ target_sources(owlet_pico INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoDelay.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoDigitalOutput.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoFlashCalibrationStore.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/PicoHalfDuplexUart.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoStepGenerator.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/PicoUsbSerial.cpp
 )
@@ -27,4 +28,5 @@ target_link_libraries(owlet_pico INTERFACE
     hardware_gpio
     hardware_pio
     hardware_sync
+    hardware_uart
 )

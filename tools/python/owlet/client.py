@@ -11,17 +11,19 @@ import serial
 from serial.tools import list_ports
 
 from .protocol import (
-    PROTOCOL_VERSION,
     AxisCalibration,
     Capabilities,
-    Position,
-    ProtocolError,
-    Sentence,
     decode,
+    Diagnostics,
     encode,
     parse_calibration,
     parse_caps,
+    parse_diag,
     parse_position,
+    Position,
+    PROTOCOL_VERSION,
+    ProtocolError,
+    Sentence,
 )
 
 _AXES = ("pan", "tilt")
@@ -185,6 +187,16 @@ class Owlet:
         """The calibration stored on the device for 'pan' or 'tilt'."""
         a = _axis(axis)
         return parse_calibration(self.request("CAL", a.upper(), expect="CAL"))
+
+    def diag(self, axis: str) -> Diagnostics:
+        """What the motor driver of 'pan' or 'tilt' reports: faults, load, stall, current.
+
+        ``available`` is False on a head whose drivers have no data link (the
+        servo head) or while a driver is not answering (its motor supply is off).
+        Firmware before 0.4.0 does not know the command and raises OwletError.
+        """
+        a = _axis(axis)
+        return parse_diag(self.request("DIAG", a.upper(), expect="DIAG"))
 
     def set_calibration(self, axis: str, min_us: int, center_us: int, max_us: int,
                         min_deg: float, max_deg: float) -> None:

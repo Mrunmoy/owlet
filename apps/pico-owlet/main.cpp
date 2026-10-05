@@ -11,19 +11,26 @@
 #include "owlet/core/ActivityIndicator.hpp"
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
+#include "owlet/core/HeadDiagnostics.hpp"
+#include "owlet/core/Heartbeat.hpp"
 #include "owlet/core/PanTilt.hpp"
+#include "owlet/core/Poller.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/platform/pico/PicoClock.hpp"
 #include "owlet/platform/pico/PicoDigitalOutput.hpp"
 #include "owlet/platform/pico/PicoFlashCalibrationStore.hpp"
+#include "owlet/platform/pico/PicoHalfDuplexUart.hpp"
 #include "owlet/platform/pico/PicoStepGenerator.hpp"
 #include "owlet/platform/pico/PicoUsbSerial.hpp"
 #include "owlet/stepper/SharedEnable.hpp"
 #include "owlet/stepper/StepperAxis.hpp"
+#include "owlet/stepper/Tmc2209.hpp"
+#include "owlet/stepper/Tmc2209Monitor.hpp"
 #include "owlet/stepper/Tmc2209Standalone.hpp"
 #include "owlet/text/TextProtocol.hpp"
 
 #include "hardware/pio.h"
+#include "hardware/uart.h"
 #include "pico/stdlib.h"
 
 #include <cstdint>
@@ -36,6 +43,7 @@ using ::owlet::StepperAxis;
 using ::owlet::platform::pico::PicoClock;
 using ::owlet::platform::pico::PicoDigitalOutput;
 using ::owlet::platform::pico::PicoFlashCalibrationStore;
+using ::owlet::platform::pico::PicoHalfDuplexUart;
 using ::owlet::platform::pico::PicoStepGenerator;
 using ::owlet::platform::pico::PicoStepProgram;
 using ::owlet::platform::pico::PicoUsbSerial;
@@ -47,16 +55,47 @@ constexpr unsigned kPanStepPin = 2;
 constexpr unsigned kPanDirPin = 3;
 constexpr unsigned kTiltStepPin = 7; // as built: the reverse of the pan pair
 constexpr unsigned kTiltDirPin = 6;
-constexpr unsigned kEnablePin = 8;       // both drivers, active low
-constexpr unsigned kMs1Pin = 12;         // both drivers
-constexpr unsigned kMs2Pin = 13;         // both drivers
-constexpr unsigned kActivityLedPin = 22; // sinks the LED: low = lit
+constexpr unsigned kEnablePin = 8; // both drivers, active low
+constexpr unsigned kMs1Pin = 12;   // both drivers
+constexpr unsigned kMs2Pin = 13;   // both drivers
+// Each driver's PDN/UART pin has its own serial line (TX and RX joined at the
+// driver), so the two need no distinct addresses and MS1/MS2 stay shared.
+constexpr unsigned kPanUartTxPin = 4; // UART1
+constexpr unsigned kPanUartRxPin = 5;
+constexpr unsigned kTiltUartTxPin = 0; // UART0
+constexpr unsigned kTiltUartRxPin = 1;
+constexpr unsigned kHeartbeatLedPin = PICO_DEFAULT_LED_PIN; // the LED on the board
+constexpr unsigned kActivityLedPin = 22;                    // sinks the LED: low = lit
 
 // ── Mechanism ───────────────────────────────────────────────────────────────
 
 constexpr uint32_t kFullStepsPerRev = 200; // 1.8° motors
 constexpr Microsteps kMicrosteps = Microsteps::k16;
 constexpr float kBeltReduction = 3.0f; // 20T motor pulley : 60T output
+
+// ── Drivers over UART ───────────────────────────────────────────────────────
+// When a TMC2209 answers on its UART the firmware takes the current and the
+// microstep setting over from the potentiometer and the MS pins. When it
+// does not (motor supply off, or no UART wired) the head runs standalone,
+// exactly as before: the same 1/16 comes from the MS pins.
+
+constexpr ::owlet::Tmc2209::Config makeDriver()
+{
+    ::owlet::Tmc2209::Config c;
+    // MS1 and MS2 are both high for 1/16 in standalone mode, and those two
+    // pins are also the UART address: 3.
+    c.address = 3;
+    // About what the potentiometers were giving when the head was tested
+    // (0.23 A from the supply for both motors holding).
+    c.runCurrentMa = 450;
+    c.holdCurrentMa = 250;
+    c.microsteps = static_cast<uint16_t>(::owlet::tmc2209::microstepCount(kMicrosteps));
+    c.senseMilliOhm = 110;
+    c.stallThreshold = 0; // stall reporting off until the load values are characterised
+    return c;
+}
+
+constexpr ::owlet::Tmc2209::Config kDriver = makeDriver();
 
 // Flip if an axis turns the wrong way. Pan + must be the camera's own right
 // (the left of someone facing it) and tilt + up. Both confirmed by eye on the
@@ -105,6 +144,9 @@ int main()
     static PicoDigitalOutput activityLed(kActivityLedPin, PicoDigitalOutput::Polarity::ActiveLow);
     ::owlet::tmc2209::selectMicrosteps(ms1, ms2, kMicrosteps);
 
+    static PicoDigitalOutput heartbeatLed(kHeartbeatLedPin,
+                                          PicoDigitalOutput::Polarity::ActiveHigh);
+
     static PicoUsbSerial usb;
     (void)usb.init(); // without USB there is no one to report a failure to
 
@@ -133,12 +175,27 @@ int main()
         ::owlet::core::CalibrationRecord{pan.defaultCalibration(), tilt.defaultCalibration()});
     calibrator.begin();
 
+    // The drivers' UARTs. A link that failed to start, or a driver that does
+    // not answer, just leaves that axis in standalone mode with no diagnostics.
+    static PicoHalfDuplexUart panLink(uart1, kPanUartTxPin, kPanUartRxPin);
+    static PicoHalfDuplexUart tiltLink(uart0, kTiltUartTxPin, kTiltUartRxPin);
+    (void)panLink.init();
+    (void)tiltLink.init();
+    static ::owlet::Tmc2209 panDriver(panLink, kDriver);
+    static ::owlet::Tmc2209 tiltDriver(tiltLink, kDriver);
+    static ::owlet::Tmc2209Monitor panMonitor(panDriver);
+    static ::owlet::Tmc2209Monitor tiltMonitor(tiltDriver,
+                                               ::owlet::Tmc2209Monitor::kPollPeriodMs / 2);
+    static ::owlet::core::HeadDiagnostics diagnostics(&panMonitor, &tiltMonitor);
+    static ::owlet::core::Heartbeat heartbeat(heartbeatLed);
+
     // Protocols are plug-ins: to add your own, construct it here and combine
     // them with core::ProtocolMux (docs/DESIGN.md §4.4).
     static PicoClock clock;
     static ::owlet::text::TextProtocol protocol(
-        usb, head, calibrator, clock, ::owlet::core::kFirmwareVersion);
-    static ::owlet::core::ActivityIndicator motion(head, head, activityLed);
+        usb, head, calibrator, clock, ::owlet::core::kFirmwareVersion, &diagnostics);
+    static ::owlet::core::ActivityIndicator indicator(head, head, activityLed);
+    static ::owlet::core::Poller<3> motion(indicator, {&panMonitor, &tiltMonitor, &heartbeat});
     static ::owlet::core::ControlLoop loop(usb, motion, protocol);
 
     loop.begin(clock.nowMs());

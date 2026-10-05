@@ -28,6 +28,7 @@ enum class Command : uint8_t
     Clock,
     Caps,
     Cal,
+    Diag,
 };
 
 enum class RequestStatus : uint8_t

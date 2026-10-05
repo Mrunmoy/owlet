@@ -15,12 +15,14 @@ TextProtocol::TextProtocol(::owlet::hal::IByteSink&     out,
                            IPanTilt&                    head,
                            ::owlet::core::ICalibration& calibration,
                            const ::owlet::hal::IClock&  clock,
-                           std::string_view             firmwareVersion)
+                           std::string_view             firmwareVersion,
+                           const ::owlet::core::IDiagnostics* diagnostics)
     : m_out(out),
       m_head(head),
       m_calibration(calibration),
       m_clock(clock),
-      m_firmwareVersion(firmwareVersion)
+      m_firmwareVersion(firmwareVersion),
+      m_diagnostics(diagnostics)
 {
 }
 
@@ -260,6 +262,10 @@ void TextProtocol::execute(const Request& req)
     case Command::Cal:
         executeCal(req);
         return;
+    case Command::Diag:
+        sendDiag(req.token == "PAN" ? ::owlet::core::Axis::Pan : ::owlet::core::Axis::Tilt,
+                 req.token);
+        return;
     case Command::Limits:
     {
         const IPanTilt::Limits lim = m_head.limits();
@@ -352,6 +358,23 @@ void TextProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
     m_writer.fixed1(c.maxDeg);
     m_writer.field(c.driveMin > c.driveMax ? "R" : "N");
     m_writer.field(kSourceCodes[static_cast<std::size_t>(m_calibration.source())]);
+    flush();
+}
+
+void TextProtocol::sendDiag(::owlet::core::Axis axis, std::string_view name)
+{
+    // $DIAG,<AXIS>,<U|N>,<faults>,<stalled>,<load>,<current_mA>
+    // U = the driver is answering and the numbers are live; N = nothing to
+    // report (no data link to the driver, or it is not answering).
+    const ::owlet::hal::AxisDiagnostics d =
+        (m_diagnostics != nullptr) ? m_diagnostics->read(axis) : ::owlet::hal::AxisDiagnostics{};
+    m_writer.begin("DIAG");
+    m_writer.field(name);
+    m_writer.field(d.available ? "U" : "N");
+    m_writer.uint(d.faults);
+    m_writer.uint(d.stalled ? 1U : 0U);
+    m_writer.uint(d.load);
+    m_writer.uint(d.currentMa);
     flush();
 }
 

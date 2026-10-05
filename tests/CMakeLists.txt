@@ -21,6 +21,7 @@ owlet_add_test(owlet_pca9685_driver_test    test_pca9685_driver.cpp owlet::pca96
 owlet_add_test(owlet_servo_test             test_servo.cpp owlet::servo)
 owlet_add_test(owlet_text_codec_test        test_text_codec.cpp owlet::text)
 owlet_add_test(owlet_stepper_axis_test      test_stepper_axis.cpp owlet::core owlet::stepper)
+owlet_add_test(owlet_tmc2209_test           test_tmc2209.cpp owlet::core owlet::stepper)
 owlet_add_test(owlet_pan_tilt_test          test_pan_tilt.cpp owlet::core owlet::servo)
 owlet_add_test(owlet_calibration_test       test_calibration.cpp owlet::core owlet::servo)
 owlet_add_test(owlet_activity_indicator_test test_activity_indicator.cpp owlet::core)

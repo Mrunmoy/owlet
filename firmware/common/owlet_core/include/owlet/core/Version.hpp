@@ -6,6 +6,6 @@ namespace owlet::core
 {
 
 // Reported in $READY / $PONG. Bump on every tagged release.
-inline constexpr std::string_view kFirmwareVersion = "0.3.0";
+inline constexpr std::string_view kFirmwareVersion = "0.4.0";
 
 } // namespace owlet::core

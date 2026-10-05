@@ -112,6 +112,17 @@ class CapabilitiesAndCalibrationTest(unittest.TestCase):
         self.assertEqual((c.speed_min, c.speed_max, c.velocity_max), (1.0, 500.0, 500.0))
         self.assertEqual((c.watchdog_min_ms, c.watchdog_max_ms, c.stream_max_hz), (50, 5000, 50))
 
+    def test_diag(self):
+        d = self.head.diag("pan")
+        self.assertTrue(d.available)
+        self.assertEqual((d.axis, d.faults, d.stalled, d.load, d.current_ma), ("pan", 6, True, 37, 459))
+        self.assertEqual(d.fault_names, ["over-temperature shutdown", "short on coil A"])
+        t = self.head.diag("tilt")
+        self.assertFalse(t.available)
+        self.assertEqual(t.fault_names, [])
+        with self.assertRaises(ValueError):
+            self.head.diag("roll")
+
     def test_read_calibration(self):
         c = self.head.calibration("pan")
         self.assertEqual((c.axis, c.min_us, c.center_us, c.max_us), ("pan", 500, 1500, 2500))

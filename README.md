@@ -54,7 +54,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Plug in and go.** The ESP32-S3's built-in USB shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
 - **Human-readable, checksummed protocol.** One line per message, like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
 - **Know where it is, and when.** Poll the position with `$POS` or stream it at up to 50 Hz. Every report is timestamped with the device clock, and the client maps those timestamps onto your PC's clock, so you can ask "where was the camera pointing when this frame was taken?"
-- **Self-describing.** The head reports its capabilities (`$CAPS`) and its calibration (`$CAL`), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
+- **Self-describing.** The head reports its capabilities (`$CAPS`), its calibration (`$CAL`) and, on the stepper head, what its motor drivers say about themselves (`$DIAG`: current, load, faults), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
 - **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
 - **Smooth, speed-limited motion.** Constant-velocity slew from 1 to 500 °/s, timed from the actual elapsed time so it doesn't speed up or slow down with loop timing.
 - **Safe by default.** The motors are limp at power-up and nothing moves until you explicitly enable it.
@@ -64,7 +64,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 352 automated tests: 268 C++ unit and integration tests, plus 84 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
+- **Tested.** 374 automated tests: 288 C++ unit and integration tests, plus 86 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -148,7 +148,7 @@ There are two reference heads. Both speak the same protocol and run the same cor
 | Position | absolute, ±90° | relative: where it is at `enable` is taken as the pose you give |
 | Smallest step | about 0.44° | 0.0375° |
 | Top speed | 500 °/s | 240 °/s (ran clean at 360) |
-| Status | verified on hardware | verified on hardware: pan ±90°, tilt ±60°, up to 240 °/s; not yet run under camera-tracking |
+| Status | verified on hardware (firmware 0.3.0) | verified on hardware (firmware 0.4.0): pan ±90°, tilt ±60°, up to 240 °/s |
 
 ### Servo head: bill of materials
 
@@ -221,6 +221,8 @@ flowchart LR
 | `GP6` / `GP7` | Tilt driver `DIR` / `STEP` | Note the order: the reverse of the pan pair |
 | `GP8` | `EN` on both drivers | Active low; the firmware keeps it high (motors off) until `enable` |
 | `GP12` / `GP13` | `MS1` / `MS2` on both drivers | Microstep select, set by the firmware (1/16) |
+| `GP4` + `GP5` | `PDN/UART` on the pan driver | TMC2209 UART, one private line per driver: the firmware sets the motor current over it and reads load and faults (`owlet diag`) |
+| `GP0` + `GP1` | `PDN/UART` on the tilt driver | As above |
 | `GP22` | Activity LED cathode (`3V3` → resistor → LED → `GP22`) | The pin sinks the LED; lit while the head is moving |
 | `3V3(OUT)` | `VIO` on both drivers | |
 | `GND` | Driver grounds and supply negative | |
@@ -265,7 +267,7 @@ pip install ./tools/python
 ### 3. Say hello
 
 ```bash
-owlet ping                  # owlet 0.3.0 (protocol v3) on /dev/ttyACM1
+owlet ping                  # owlet 0.4.0 (protocol v3) on /dev/ttyACM1
 owlet enable                # servos energise at center (0, 0)
 owlet move 20 0 --wait      # base turns 20° and the command waits until it's there
 owlet pos                   # where is it?
@@ -404,7 +406,7 @@ owlet -p /tmp/owlet watch
 
 | Request | Reply | Notes |
 |---------|-------|-------|
-| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.3.0` |
+| `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.4.0` |
 | `$ENABLE` | `$ACK,ENABLE` | Energise at the last known position (0, 0 after boot) |
 | `$ENABLE,<pan>,<tilt>` | `$ACK,ENABLE` | Energise at a pose; if already enabled, moves there smoothly instead |
 | `$DISABLE` | `$ACK,DISABLE` | Servos limp |
@@ -421,11 +423,12 @@ owlet -p /tmp/owlet watch
 | `$WATCHDOG` / `$WATCHDOG,<ms>` | `$WATCHDOG,<ms>` / `$ACK,WATCHDOG` | Velocity watchdog: 0 = off, 50–5000 ms, default 500 |
 | `$CLOCK` | `$CLOCK,<ms>` | Device uptime in ms (wraps after ~49.7 days) |
 | `$CAPS` | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Capabilities, e.g. `$CAPS,1.0,500.0,500.0,50,5000,50` |
+| `$DIAG,<AXIS>` | `$DIAG,<AXIS>,<U\|N>,<faults>,<stalled>,<load>,<mA>` | What the motor driver reports. `N` = no driver data (servo head, or the motor supply is off). Faults are a bit mask; see [`docs/DESIGN.md` §5.7](docs/DESIGN.md) |
 | `$CAL,<AXIS>` | `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>,<R\|N>,<F\|S\|M>` | Calibration of `PAN`/`TILT`: reversed or not; factory / saved / modified |
 | `$CAL,<AXIS>,<min_us>,<ctr_us>,<max_us>,<min°>,<max°>` | `$ACK,CAL` | Set it. Pulse changes need the servos disabled (`NAK,CAL,ENA`); limits can change any time |
 | `$CAL,SAVE` / `$CAL,RESET` | `$ACK,CAL` | Persist to flash / restore factory values and erase (reset needs disabled) |
 
-Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v3** (owlet 0.3.0); clients should check the version in `$PONG`.
+Angles are degrees from center: **pan + = right, tilt + = up**. Numbers may have an optional sign and up to 2 decimal places. `MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` are refused with `NAK …,DIS` until the head is enabled. This is protocol **v3** (since owlet 0.3.0); clients should check the version in `$PONG`.
 
 ### Messages owlet sends on its own
 
@@ -655,7 +658,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 
 ## Project status and roadmap
 
-**v0.3.0 firmware, v0.3.1 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. Motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` have been verified on the reference head.
+**v0.4.0 firmware, v0.3.2 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. There are two reference heads. On the servo head (ESP32-S3), motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` were verified with firmware 0.3.0; 0.4.0 builds for it but has not been re-run on that hardware. On the stepper head (Raspberry Pi Pico), motion, directions, ranges, speed and acceleration limits, velocity mode, the watchdog and calibration storage are verified with 0.4.0.
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection
@@ -670,7 +673,9 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 - [x] First motion of the stepper head: both axes swept and back on their marks
 - [x] Stepper head directions confirmed (pan + = camera's right, tilt + = up)
 - [x] Stepper head on 12 V: speed and acceleration limits measured and set
-- [ ] Run camera-tracking against the stepper head
+- [ ] Re-run the servo head's hardware suite on firmware 0.4.0
+- [x] Stepper current set over the TMC2209 UART instead of the potentiometer; driver load and faults readable (`owlet diag`)
+- [ ] Stall detection: characterise the load value against speed and pick thresholds
 - [ ] Home sensors for the stepper head (it has no absolute position today)
 - [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))

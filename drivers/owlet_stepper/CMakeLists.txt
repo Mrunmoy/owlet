@@ -3,6 +3,8 @@
 
 set(OWLET_STEPPER_SRCS
     src/StepperAxis.cpp
+    src/Tmc2209.cpp
+    src/Tmc2209Monitor.cpp
 )
 
 if(ESP_PLATFORM)

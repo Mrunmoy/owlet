@@ -1,6 +1,6 @@
 # Pan-tilt wiring: Pico + 2 x TMC2209 + 2 x NEMA 17
 
-Diagram: `wiring.png` (or `wiring.svg`). Regenerate with `python3 make_wiring.py`, then `convert -density 110 wiring.svg wiring.png`.
+Diagram: `wiring.png` (or `wiring.svg`). Regenerate with `python3 make_wiring.py`, then `convert -density 96 wiring.svg wiring.png`.
 
 The firmware for this wiring is `apps/pico-owlet` (`./build.py --pico --flash`). The pin numbers
 below are the constants at the top of `apps/pico-owlet/main.cpp`; change both together.
@@ -32,15 +32,20 @@ Matches the three labels printed on the board: EN top-left, DIR bottom-left, GND
 | Pico GP8 (pin 11)        | EN on both drivers                  | Active low. Optional 10 k pull-up to 3.3 V keeps the motors off until firmware enables them. |
 | Pico GP12 (pin 16)       | MS1 on both drivers                 | Microstep select, shared. No resistor needed. |
 | Pico GP13 (pin 17)       | MS2 on both drivers                 | Microstep select, shared. No resistor needed. |
-| Pico 3V3(OUT) (pin 36)   | VIO on both drivers                 | Logic supply only. |
-| Pico GP22 (pin 29)       | Activity LED cathode                | 3.3 V → resistor → LED → GP22: the pin sinks the LED (low = lit). Lit while the head is moving. Use about 330 Ω to 1 kΩ; with 10 kΩ it is barely visible. |
-| Pico GND (pin 38)        | Driver GND pins and supply negative | Every ground joined together. |
-| 12 V supply positive     | VM on both drivers                  | Never to the Pico. |
-| 100 uF 25 V capacitor    | Across VM and GND at each driver    | Stripe (negative) to GND. Optional when the supply has a large output capacitor and wires under about 15 cm. |
-| Motor coil 1             | A2 and A1                           | |
-| Motor coil 2             | B1 and B2                           | |
+| Pico GP4 (pin 6) and GP5 (pin 7) | PDN/UART on the **pan** driver, all three joined | TMC2209 UART for pan: TX and RX on one line. |
+| Pico GP0 (pin 1) and GP1 (pin 2) | PDN/UART on the **tilt** driver, all three joined | TMC2209 UART for tilt. |
 
-PDN, UART and CLK stay unconnected. The Pico is powered from USB only.
+The firmware uses the two UART lines to set each motor's current (so the potentiometers no
+longer matter), to select the microstep size, and to read load and fault status: `owlet diag`.
+Each driver has a private line, so the drivers need no distinct addresses and MS1/MS2 stay
+shared. The drivers only answer while the motor supply is on; without it the head still runs,
+from the MS pins and the potentiometers. No series resistor is needed: the Pico only drives
+the line while it is sending.
+
+The LED on the Pico board itself (GP25) is the heartbeat: one short flash a second while the
+firmware is running. It needs no wiring.
+
+The driver pins labelled UART (the fifth) and CLK stay unconnected. The Pico is powered from USB only.
 
 ## Microstepping
 
@@ -103,6 +108,5 @@ Each stage only needs the one before it to have worked.
 
 | Pico pin   | Purpose |
 |------------|---------|
-| GP4, GP5   | TMC2209 UART (current and microstep setup in software, stall detection) |
 | GP10, GP11 | Pan and tilt home switches |
-| GP14, GP15 | Separate MS1/MS2 for the tilt driver, if per-axis step size is ever wanted |
+| GP14, GP15 | Free |

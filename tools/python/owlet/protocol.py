@@ -84,7 +84,37 @@ class AxisCalibration:
     source: str             # "factory", "saved" or "modified"
 
 
+@dataclass(frozen=True)
+class Diagnostics:
+    """What one axis's motor driver reports about itself ($DIAG,<AXIS>)."""
+
+    axis: str               # "pan" or "tilt"
+    available: bool         # False: no data link to the driver, or it is not answering
+    faults: int             # bit mask, see FAULT_NAMES
+    stalled: bool           # load at or beyond the stall threshold while moving
+    load: int               # driver's load measure (TMC2209: 0..510, high = running free)
+    current_ma: int         # motor run current the driver is set to, RMS
+
+    FAULT_NAMES = {1: "over-temperature warning", 2: "over-temperature shutdown",
+                   4: "short on coil A", 8: "short on coil B",
+                   16: "coil A open", 32: "coil B open"}
+
+    @property
+    def fault_names(self) -> list[str]:
+        return [name for bit, name in self.FAULT_NAMES.items() if self.faults & bit]
+
+
 _SOURCES = {"F": "factory", "S": "saved", "M": "modified"}
+
+
+def parse_diag(sentence: Sentence) -> Diagnostics:
+    f = sentence.fields
+    if sentence.name != "DIAG" or len(f) != 6 or f[1] not in ("U", "N"):
+        raise ProtocolError(f"not a DIAG report: {sentence}")
+    try:
+        return Diagnostics(f[0].lower(), f[1] == "U", int(f[2]), f[3] == "1", int(f[4]), int(f[5]))
+    except ValueError as e:
+        raise ProtocolError(f"bad DIAG field in {sentence}") from e
 
 
 def parse_caps(sentence: Sentence) -> Capabilities:

@@ -3,6 +3,7 @@
 #include "owlet/core/CalibrationCodec.hpp"
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/PanTilt.hpp"
+#include "owlet/servo/Servo.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,6 +12,7 @@
 #include <string>
 
 using ::owlet::Servo;
+using ::owlet::hal::AxisCalibration;
 using ::owlet::core::Axis;
 using ::owlet::core::CalibrationCodec;
 using ::owlet::core::CalibrationRecord;
@@ -26,15 +28,9 @@ using HeadResult = ::owlet::core::IPanTilt::Result;
 namespace
 {
 
-Servo::Calibration cal(uint16_t minUs, uint16_t centerUs, uint16_t maxUs, float minDeg, float maxDeg)
+AxisCalibration cal(uint16_t minUs, uint16_t centerUs, uint16_t maxUs, float minDeg, float maxDeg)
 {
-    Servo::Calibration c;
-    c.minPulseUs    = minUs;
-    c.centerPulseUs = centerUs;
-    c.maxPulseUs    = maxUs;
-    c.minDeg        = minDeg;
-    c.maxDeg        = maxDeg;
-    return c;
+    return AxisCalibration{minUs, centerUs, maxUs, minDeg, maxDeg};
 }
 
 CalibrationRecord factory()
@@ -42,10 +38,10 @@ CalibrationRecord factory()
     return CalibrationRecord{cal(500, 1500, 2500, -90, 90), cal(500, 1500, 2500, -90, 90)};
 }
 
-bool same(const Servo::Calibration& a, const Servo::Calibration& b)
+bool same(const AxisCalibration& a, const AxisCalibration& b)
 {
-    return a.minPulseUs == b.minPulseUs && a.centerPulseUs == b.centerPulseUs &&
-           a.maxPulseUs == b.maxPulseUs && a.minDeg == b.minDeg && a.maxDeg == b.maxDeg;
+    return a.driveMin == b.driveMin && a.driveCenter == b.driveCenter &&
+           a.driveMax == b.driveMax && a.minDeg == b.minDeg && a.maxDeg == b.maxDeg;
 }
 
 struct Rig
@@ -105,7 +101,7 @@ TEST(ServoCalibration, NewMappingAppliesToTheNextWrite)
 {
     FakeServoChannel ch;
     Servo            s(ch, Servo::Calibration{});
-    s.setCalibration(cal(2500, 1500, 500, -90, 90));  // reversed
+    s.applyCalibration(cal(2500, 1500, 500, -90, 90));  // reversed
     ASSERT_TRUE(s.engageAt(45.0f));
     EXPECT_EQ(ch.lastPulseUs, 1000);
 }
@@ -116,7 +112,7 @@ TEST(ServoCalibration, TargetIsPulledInsideNewLimits)
     Servo            s(ch, Servo::Calibration{});
     ASSERT_TRUE(s.engageAt(0.0f));
     s.setTarget(80.0f);
-    s.setCalibration(cal(500, 1500, 2500, -90, 60));
+    s.applyCalibration(cal(500, 1500, 2500, -90, 60));
     EXPECT_FLOAT_EQ(s.targetDeg(), 60.0f);
     EXPECT_FLOAT_EQ(s.maxDeg(), 60.0f);
 }
@@ -201,7 +197,7 @@ TEST(Calibrator, RejectsInvalidCalibration)
     const float nan = std::numeric_limits<float>::quiet_NaN();
     Rig         r;
     r.calib.begin();
-    const Servo::Calibration bad[] = {
+    const AxisCalibration bad[] = {
         cal(300, 1500, 2500, -90, 90),   // pulse below 400
         cal(500, 1500, 2700, -90, 90),   // pulse above 2600
         cal(1400, 1500, 1550, -90, 90),  // span under 200 µs
@@ -213,10 +209,10 @@ TEST(Calibrator, RejectsInvalidCalibration)
         cal(500, 1500, 2500, -90, -10),  // max limit below centre
         cal(500, 1500, 2500, nan, 90),   // not a number
     };
-    for (const Servo::Calibration& c : bad)
+    for (const AxisCalibration& c : bad)
     {
         EXPECT_EQ(r.calib.set(Axis::Pan, c), CalResult::Range)
-            << c.minPulseUs << "/" << c.centerPulseUs << "/" << c.maxPulseUs << " " << c.minDeg
+            << c.driveMin << "/" << c.driveCenter << "/" << c.driveMax << " " << c.minDeg
             << ".." << c.maxDeg;
     }
     EXPECT_TRUE(same(r.calib.get(Axis::Pan), factory().pan));
@@ -277,7 +273,7 @@ TEST(Calibrator, ResetWithFailedEraseChangesNothing)  // review C5
     EXPECT_EQ(r.calib.reset(), CalResult::Storage);
     // RAM, flash and the reported source all still agree: the saved record.
     EXPECT_EQ(r.calib.source(), Source::Saved);
-    EXPECT_EQ(r.calib.get(Axis::Pan).minPulseUs, 600);
+    EXPECT_EQ(r.calib.get(Axis::Pan).driveMin, 600);
 }
 
 // ── Review findings (calibration round, 2026-10-01) ─────────────────────────
@@ -294,10 +290,10 @@ TEST(CalibratorReview, InvalidFactoryRecordFallsBackToSafeDefaults)  // C4
                      CalibrationRecord{cal(1500, 2600, 1550, 0, 0), factory().tilt}};
     calib.begin();
     EXPECT_FALSE(calib.factoryWasValid());
-    EXPECT_TRUE(Calibrator::valid(calib.get(Axis::Pan)));
-    EXPECT_TRUE(same(calib.get(Axis::Pan), Servo::Calibration{}));
+    EXPECT_TRUE(pan.acceptsCalibration(calib.get(Axis::Pan)));
+    EXPECT_TRUE(same(calib.get(Axis::Pan), pan.defaultCalibration()));
     EXPECT_EQ(calib.reset(), CalResult::Ok);  // reset re-applies the *safe* factory
-    EXPECT_TRUE(Calibrator::valid(calib.get(Axis::Pan)));
+    EXPECT_TRUE(pan.acceptsCalibration(calib.get(Axis::Pan)));
 }
 
 TEST(CalibratorReview, NarrowingLimitsInVelocityModeNeverJumps)  // C1
@@ -377,19 +373,19 @@ TEST(CalibratorReview, LimitsAreStoredAtTenthOfADegree)  // C7
 TEST(ServoCalibration, PulseToAngleInvertsAngleToPulse)
 {
     FakeServoChannel ch;
-    for (const Servo::Calibration& c :
+    for (const AxisCalibration& c :
          {cal(500, 1500, 2500, -90, 90), cal(600, 1400, 2400, -90, 90), cal(2500, 1500, 500, -90, 90),
           cal(2450, 1520, 580, -90, 90)})
     {
-        Servo s(ch, c);
+        Servo s(ch, Servo::fromAxisCalibration(c));
         for (float deg = -90.0f; deg <= 90.0f; deg += 7.5f)
         {
             // Pulses are whole µs, so allow the angle one µs's worth of error.
-            const int   spanUs   = std::max(std::abs(c.maxPulseUs - c.centerPulseUs),
-                                            std::abs(c.minPulseUs - c.centerPulseUs));
+            const int   spanUs   = std::max(std::abs(c.driveMax - c.driveCenter),
+                                            std::abs(c.driveMin - c.driveCenter));
             const float usPerDeg = static_cast<float>(spanUs) / 90.0f;
             EXPECT_NEAR(s.pulseToAngle(s.angleToPulse(deg)), deg, 1.0f / usPerDeg + 1e-3f)
-                << c.minPulseUs << "/" << c.centerPulseUs << "/" << c.maxPulseUs << " @ " << deg;
+                << c.driveMin << "/" << c.driveCenter << "/" << c.driveMax << " @ " << deg;
         }
     }
 }

@@ -44,6 +44,30 @@ void Servo::setCalibration(const Calibration& cal)
     }
 }
 
+bool Servo::acceptsCalibration(const ::owlet::hal::AxisCalibration& c) const
+{
+    const auto inPulseRange = [](uint16_t us) { return us >= kMinPulseUs && us <= kMaxPulseUs; };
+    if (!inPulseRange(c.driveMin) || !inPulseRange(c.driveCenter) || !inPulseRange(c.driveMax))
+    {
+        return false;
+    }
+    const uint16_t lo = std::min(c.driveMin, c.driveMax);
+    const uint16_t hi = std::max(c.driveMin, c.driveMax);
+    if (hi - lo < kMinPulseSpanUs || !(lo < c.driveCenter && c.driveCenter < hi))
+    {
+        return false;
+    }
+    // Negated comparisons so NaN fails as well.
+    return std::isfinite(c.minDeg) && std::isfinite(c.maxDeg) && c.minDeg >= -kHalfSpanDeg &&
+           c.minDeg <= 0.0f && c.maxDeg >= 0.0f && c.maxDeg <= kHalfSpanDeg && c.minDeg < c.maxDeg;
+}
+
+bool Servo::calibrationNeedsRelease(const ::owlet::hal::AxisCalibration& c) const
+{
+    return c.driveMin != m_cal.minPulseUs || c.driveCenter != m_cal.centerPulseUs ||
+           c.driveMax != m_cal.maxPulseUs;
+}
+
 float Servo::pulseToAngle(uint16_t pulseUs) const
 {
     const float p      = static_cast<float>(pulseUs);

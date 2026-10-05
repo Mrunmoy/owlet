@@ -112,7 +112,9 @@ extern "C" void app_main(void)
         ESP_LOGE(kTag, "NVS init failed: calibration can't be saved this session");
     }
     static ::owlet::core::Calibrator calibrator(pan, tilt, head, calStore,
-                                                ::owlet::core::CalibrationRecord{kPanCal, kTiltCal});
+                                                ::owlet::core::CalibrationRecord{
+                                                    Servo::toAxisCalibration(kPanCal),
+                                                    Servo::toAxisCalibration(kTiltCal)});
     calibrator.begin();
     if (!calibrator.factoryWasValid())
     {

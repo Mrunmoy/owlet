@@ -66,24 +66,24 @@ float getFloat(const uint8_t* p)
     return f;
 }
 
-void putAxis(uint8_t* p, const ::owlet::Servo::Calibration& c)
+void putAxis(uint8_t* p, const ::owlet::hal::AxisCalibration& c)
 {
-    put16(p + 0, c.minPulseUs);
-    put16(p + 2, c.centerPulseUs);
-    put16(p + 4, c.maxPulseUs);
+    put16(p + 0, c.driveMin);
+    put16(p + 2, c.driveCenter);
+    put16(p + 4, c.driveMax);
     put16(p + 6, 0);
     putFloat(p + 8, c.minDeg);
     putFloat(p + 12, c.maxDeg);
 }
 
-::owlet::Servo::Calibration getAxis(const uint8_t* p)
+::owlet::hal::AxisCalibration getAxis(const uint8_t* p)
 {
-    ::owlet::Servo::Calibration c;
-    c.minPulseUs    = get16(p + 0);
-    c.centerPulseUs = get16(p + 2);
-    c.maxPulseUs    = get16(p + 4);
-    c.minDeg        = getFloat(p + 8);
-    c.maxDeg        = getFloat(p + 12);
+    ::owlet::hal::AxisCalibration c;
+    c.driveMin    = get16(p + 0);
+    c.driveCenter = get16(p + 2);
+    c.driveMax    = get16(p + 4);
+    c.minDeg      = getFloat(p + 8);
+    c.maxDeg      = getFloat(p + 12);
     return c;
 }
 

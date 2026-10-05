@@ -13,7 +13,8 @@ namespace owlet::core
 // persisted format is host-tested and platform stores only move bytes.
 //
 //   0  u32 magic 'OWLC'   4  u16 version   6  u16 reserved (0)
-//   8  pan  : u16 min_us, u16 center_us, u16 max_us, u16 pad, f32 min_deg, f32 max_deg
+//   8  pan  : u16 drive_min, u16 drive_center, u16 drive_max, u16 pad, f32 min_deg, f32 max_deg
+//             (the drive numbers are pulse widths in µs on a servo head)
 //   24 tilt : same
 //   40 u32 CRC-32 (IEEE) of bytes 0..39
 // All little-endian.

@@ -53,6 +53,25 @@
         "type": "github"
       }
     },
+    "pico-sdk-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1753763866,
+        "narHash": "sha256-8ubZW6yQnUTYxQqYI6hi7s3kFVQhe5EaxVvHmo93vgk=",
+        "ref": "refs/tags/2.2.0",
+        "rev": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+        "revCount": 1208,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/raspberrypi/pico-sdk.git"
+      },
+      "original": {
+        "ref": "refs/tags/2.2.0",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/raspberrypi/pico-sdk.git"
+      }
+    },
     "root": {
       "inputs": {
         "flake-utils": [
@@ -63,7 +82,8 @@
           "nixpkgs-esp-dev",
           "nixpkgs"
         ],
-        "nixpkgs-esp-dev": "nixpkgs-esp-dev"
+        "nixpkgs-esp-dev": "nixpkgs-esp-dev",
+        "pico-sdk-src": "pico-sdk-src"
       }
     },
     "systems": {

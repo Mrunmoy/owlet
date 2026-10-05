@@ -1,6 +1,6 @@
 #pragma once
 
-#include "owlet/servo/Servo.hpp"
+#include "owlet/hal/IAxisCalibration.hpp"
 
 #include <cstdint>
 
@@ -21,21 +21,21 @@ public:
     {
         Ok,
         Range,    // values fail validation
-        Enabled,  // pulse changes (or reset) need the servos disabled
+        Enabled,  // drive changes (or reset) need the head disabled
         Storage,  // persisting failed
     };
 
     enum class Source : uint8_t
     {
-        Factory,   // built-in (Kconfig) values
+        Factory,   // built-in (build-time) values
         Saved,     // loaded from or just written to persistent storage
         Modified,  // changed since the last load/save
     };
 
     virtual ~ICalibration() = default;
 
-    [[nodiscard]] virtual ::owlet::Servo::Calibration get(Axis axis) const = 0;
-    [[nodiscard]] virtual Result set(Axis axis, const ::owlet::Servo::Calibration& cal) = 0;
+    [[nodiscard]] virtual ::owlet::hal::AxisCalibration get(Axis axis) const = 0;
+    [[nodiscard]] virtual Result set(Axis axis, const ::owlet::hal::AxisCalibration& cal) = 0;
     [[nodiscard]] virtual Result save() = 0;
     // Restore factory values and erase the saved copy.
     [[nodiscard]] virtual Result reset() = 0;

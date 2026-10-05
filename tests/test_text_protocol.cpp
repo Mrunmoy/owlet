@@ -5,6 +5,7 @@
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
+#include "owlet/servo/Servo.hpp"
 #include "owlet/text/LineWriter.hpp"
 #include "owlet/text/TextProtocol.hpp"
 
@@ -41,7 +42,7 @@ std::string line(const std::string& body)
 
 ::owlet::core::CalibrationRecord factoryCal()
 {
-    return ::owlet::core::CalibrationRecord{Servo::Calibration{}, Servo::Calibration{}};
+    return ::owlet::core::CalibrationRecord{Servo::toAxisCalibration({}), Servo::toAxisCalibration({})};
 }
 
 struct Rig

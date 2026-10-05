@@ -1,13 +1,14 @@
 #include "owlet/core/PanTilt.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace owlet::core
 {
 
-using ::owlet::Servo;
+using ::owlet::hal::IAxis;
 
-PanTilt::PanTilt(Servo& pan, Servo& tilt) : m_pan(pan), m_tilt(tilt) {}
+PanTilt::PanTilt(IAxis& pan, IAxis& tilt) : m_pan(pan), m_tilt(tilt) {}
 
 // ── Power ───────────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ PanTilt::Result PanTilt::enableAt(float panDeg, float tiltDeg)
         return Result::Range;
     }
     // A powered axis must never snap: it slews to its pose instead.
-    const auto bring = [](Servo& s, float deg)
+    const auto bring = [](IAxis& s, float deg)
     {
         if (s.engaged())
         {
@@ -121,7 +122,8 @@ PanTilt::Result PanTilt::stop()
 PanTilt::Result PanTilt::setSpeed(float degPerSec)
 {
     // Negated so NaN fails the check too.
-    if (!(degPerSec >= Servo::kMinSpeedDegPerSec && degPerSec <= Servo::kMaxSpeedDegPerSec))
+    const Capabilities caps = capabilities();
+    if (!(degPerSec >= caps.speedMin && degPerSec <= caps.speedMax))
     {
         return Result::Range;
     }
@@ -140,7 +142,7 @@ PanTilt::Result PanTilt::setVelocity(float panDegPerSec, float tiltDegPerSec)
     {
         return Result::Disabled;
     }
-    const float vmax = Servo::kMaxSpeedDegPerSec;
+    const float vmax = capabilities().velocityMax;
     // Written as negated comparisons so NaN is rejected too.
     if (!(panDegPerSec >= -vmax && panDegPerSec <= vmax) ||
         !(tiltDegPerSec >= -vmax && tiltDegPerSec <= vmax))
@@ -233,11 +235,15 @@ PanTilt::Limits PanTilt::limits() const
 
 PanTilt::Capabilities PanTilt::capabilities() const
 {
-    return Capabilities{Servo::kMinSpeedDegPerSec, Servo::kMaxSpeedDegPerSec,
-                        Servo::kMaxSpeedDegPerSec, kMinWatchdogMs, kMaxWatchdogMs};
+    // The head can only do what both of its motors can.
+    const IAxis::Capabilities pan  = m_pan.capabilities();
+    const IAxis::Capabilities tilt = m_tilt.capabilities();
+    return Capabilities{std::max(pan.speedMin, tilt.speedMin), std::min(pan.speedMax, tilt.speedMax),
+                        std::min(pan.velocityMax, tilt.velocityMax), kMinWatchdogMs,
+                        kMaxWatchdogMs};
 }
 
-bool PanTilt::inLimits(const Servo& s, float deg)
+bool PanTilt::inLimits(const IAxis& s, float deg)
 {
     return deg >= s.minDeg() && deg <= s.maxDeg();  // false for NaN
 }

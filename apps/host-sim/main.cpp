@@ -16,6 +16,7 @@
 #include "owlet/hal/IClock.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/hal/ISerialPort.hpp"
+#include "owlet/servo/Servo.hpp"
 #include "owlet/text/TextProtocol.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
 #include "owlet/sim/PCA9685Simulator.hpp"
@@ -226,7 +227,7 @@ int main(int argc, char** argv)
     FileCalibrationStore      store(calFile);
     ::owlet::core::Calibrator calibrator(
         pan, tilt, head, store,
-        ::owlet::core::CalibrationRecord{::owlet::Servo::Calibration{}, ::owlet::Servo::Calibration{}});
+        ::owlet::core::CalibrationRecord{::owlet::Servo::toAxisCalibration({}), ::owlet::Servo::toAxisCalibration({})});
     calibrator.begin();
     ::owlet::text::TextProtocol protocol(port, head, calibrator, clock,
                                          ::owlet::core::kFirmwareVersion);

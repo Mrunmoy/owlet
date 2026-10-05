@@ -5,5 +5,6 @@ idf_component_register(
         owlet_core
         owlet_text
         owlet_pca9685
+        owlet_servo
         owlet_esp32
 )

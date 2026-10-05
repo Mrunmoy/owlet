@@ -1,6 +1,6 @@
 #pragma once
 
-#include "owlet/servo/Servo.hpp"
+#include "owlet/hal/IAxisCalibration.hpp"
 
 namespace owlet::core
 {
@@ -8,12 +8,12 @@ namespace owlet::core
 // Calibration of both axes, as persisted.
 struct CalibrationRecord
 {
-    ::owlet::Servo::Calibration pan;
-    ::owlet::Servo::Calibration tilt;
+    ::owlet::hal::AxisCalibration pan;
+    ::owlet::hal::AxisCalibration tilt;
 };
 
-// Where calibration is kept between power cycles (NVS on ESP32, a file in the
-// simulator, an in-memory fake in tests).
+// Where calibration is kept between power cycles (NVS on ESP32, a flash
+// sector on the Pico, a file in the simulator, an in-memory fake in tests).
 class ICalibrationStore
 {
 public:

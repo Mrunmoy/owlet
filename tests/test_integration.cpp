@@ -10,6 +10,7 @@
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/ProtocolMux.hpp"
+#include "owlet/servo/Servo.hpp"
 #include "owlet/text/TextProtocol.hpp"
 #include "owlet/hal/IDelayProvider.hpp"
 #include "owlet/pca9685/PCA9685.hpp"
@@ -93,8 +94,7 @@ protected:
     ::owlet::test::FakeClock       clock;
     ::owlet::test::FakeCalibrationStore store;
     ::owlet::core::Calibrator      calib{pan, tilt, head, store,
-                                    ::owlet::core::CalibrationRecord{Servo::Calibration{},
-                                                                     Servo::Calibration{}}};
+                                    ::owlet::core::CalibrationRecord{Servo::toAxisCalibration({}), Servo::toAxisCalibration({})}};
     TextProtocol                   native{port, head, calib, clock, "test"};
     ProtocolMux<1>                 mux{{&native}};
     ControlLoop                    proc{port, head, mux};

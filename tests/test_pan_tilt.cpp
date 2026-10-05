@@ -1,5 +1,6 @@
 #include "FakeServoChannel.hpp"
 #include "owlet/core/PanTilt.hpp"
+#include "owlet/servo/Servo.hpp"
 
 #include <gtest/gtest.h>
 

@@ -298,7 +298,7 @@ void TextProtocol::executeCal(const Request& req)
             sendCal(axis, req.token);
             return;
         }
-        // Range-check before narrowing: 66036 would wrap to a valid 500 µs.
+        // Range-check before narrowing: 66036 would wrap to a valid 500.
         for (std::size_t i = 0; i < 3; ++i)
         {
             if (req.args[i] > 65535.0f)
@@ -307,13 +307,13 @@ void TextProtocol::executeCal(const Request& req)
                 return;
             }
         }
-        ::owlet::Servo::Calibration c;
-        c.minPulseUs    = static_cast<uint16_t>(req.args[0]);
-        c.centerPulseUs = static_cast<uint16_t>(req.args[1]);
-        c.maxPulseUs    = static_cast<uint16_t>(req.args[2]);
-        c.minDeg        = req.args[3];
-        c.maxDeg        = req.args[4];
-        r               = m_calibration.set(axis, c);
+        ::owlet::hal::AxisCalibration c;
+        c.driveMin    = static_cast<uint16_t>(req.args[0]);
+        c.driveCenter = static_cast<uint16_t>(req.args[1]);
+        c.driveMax    = static_cast<uint16_t>(req.args[2]);
+        c.minDeg      = req.args[3];
+        c.maxDeg      = req.args[4];
+        r             = m_calibration.set(axis, c);
     }
 
     switch (r)
@@ -342,15 +342,15 @@ void TextProtocol::sendCal(::owlet::core::Axis axis, std::string_view name)
                       static_cast<std::size_t>(Source::Modified) == 2,
                   "kSourceCodes must follow ICalibration::Source");
 
-    const ::owlet::Servo::Calibration c = m_calibration.get(axis);
+    const ::owlet::hal::AxisCalibration c = m_calibration.get(axis);
     m_writer.begin("CAL");
     m_writer.field(name);
-    m_writer.uint(c.minPulseUs);
-    m_writer.uint(c.centerPulseUs);
-    m_writer.uint(c.maxPulseUs);
+    m_writer.uint(c.driveMin);
+    m_writer.uint(c.driveCenter);
+    m_writer.uint(c.driveMax);
     m_writer.fixed1(c.minDeg);
     m_writer.fixed1(c.maxDeg);
-    m_writer.field(c.minPulseUs > c.maxPulseUs ? "R" : "N");
+    m_writer.field(c.driveMin > c.driveMax ? "R" : "N");
     m_writer.field(kSourceCodes[static_cast<std::size_t>(m_calibration.source())]);
     flush();
 }

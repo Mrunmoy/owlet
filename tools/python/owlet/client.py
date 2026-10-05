@@ -34,6 +34,8 @@ def _axis(name: str) -> str:
     return a
 
 ESPRESSIF_VID = 0x303A
+RASPBERRY_PI_VID = 0x2E8A  # Pico stepper head (pico-sdk USB CDC)
+OWLET_VIDS = frozenset({ESPRESSIF_VID, RASPBERRY_PI_VID})
 
 # Sentences that are replies to a request (POS is excluded: it is also streamed).
 REPLY_NAMES = frozenset({"ACK", "NAK", "ERR", "PONG", "CLOCK", "SPEED", "WATCHDOG", "LIMITS"})
@@ -53,8 +55,8 @@ class OwletError(Exception):
 
 
 def find_ports() -> list[str]:
-    """Serial devices that look like an ESP32-S3 USB-Serial-JTAG port."""
-    return sorted(p.device for p in list_ports.comports() if p.vid == ESPRESSIF_VID)
+    """Serial devices that look like an owlet head (ESP32 or Raspberry Pi Pico USB)."""
+    return sorted(p.device for p in list_ports.comports() if p.vid in OWLET_VIDS)
 
 
 class Owlet:

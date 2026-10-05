@@ -2,15 +2,16 @@
 
 #include "owlet/core/IPanTilt.hpp"
 #include "owlet/core/ITickable.hpp"
-#include "owlet/servo/Servo.hpp"
+#include "owlet/hal/IAxis.hpp"
 
 #include <cstdint>
 
 namespace owlet::core
 {
 
-// Two-axis head on two Servo objects. Owns the enable/limit/motion policy;
-// Servo owns mapping and slew.
+// Two-axis head on two hal::IAxis objects. Owns the enable/limit/motion
+// policy; each axis owns its own mapping and motion profile, so the motor
+// type (servo, stepper, ...) is invisible from here upward.
 //
 // Partial engagement (one axis failed to release on DISABLE) is a fault
 // state: new motion is refused, but STOP and VEL 0,0 still work on whatever
@@ -21,7 +22,7 @@ public:
     // Longest motion step per tick: a starved loop resumes without lurching.
     static constexpr uint32_t kMaxStepMs = 100;
 
-    PanTilt(::owlet::Servo& pan, ::owlet::Servo& tilt);
+    PanTilt(::owlet::hal::IAxis& pan, ::owlet::hal::IAxis& tilt);
 
     PanTilt(const PanTilt&)            = delete;
     PanTilt& operator=(const PanTilt&) = delete;
@@ -54,17 +55,17 @@ public:
     [[nodiscard]] TickStatus tick(uint32_t dtMs) override;
 
 private:
-    [[nodiscard]] static bool inLimits(const ::owlet::Servo& s, float deg);
+    [[nodiscard]] static bool inLimits(const ::owlet::hal::IAxis& axis, float deg);
     void releaseBoth();
 
     [[nodiscard]] bool inVelocityMode() const;
     [[nodiscard]] bool bothEngaged() const { return m_pan.engaged() && m_tilt.engaged(); }
     [[nodiscard]] bool anyEngaged() const { return m_pan.engaged() || m_tilt.engaged(); }
 
-    ::owlet::Servo& m_pan;
-    ::owlet::Servo& m_tilt;
-    uint32_t        m_watchdogMs{kDefaultWatchdogMs};
-    uint32_t        m_velocityAgeMs{0};  // time since the last setVelocity()
+    ::owlet::hal::IAxis& m_pan;
+    ::owlet::hal::IAxis& m_tilt;
+    uint32_t             m_watchdogMs{kDefaultWatchdogMs};
+    uint32_t             m_velocityAgeMs{0};  // time since the last setVelocity()
 };
 
 } // namespace owlet::core

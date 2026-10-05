@@ -2,13 +2,13 @@
 
 <p align="center">
   <b>A USB pan-tilt head you can drive from any computer, in any language, built for camera tracking.</b><br>
-  ESP32-S3 · PCA9685 · two 180° servos · one USB cable · a plain-text protocol with checksums
+  ESP32-S3 + servos, or Raspberry Pi Pico + steppers · one USB cable · a plain-text protocol with checksums
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
   <img alt="Firmware: ESP-IDF 5.5" src="https://img.shields.io/badge/firmware-ESP--IDF%205.5-red.svg">
-  <img alt="MCU: ESP32-S3" src="https://img.shields.io/badge/MCU-ESP32--S3-blue.svg">
+  <img alt="MCU: ESP32-S3 | RP2040" src="https://img.shields.io/badge/MCU-ESP32--S3%20%7C%20RP2040-blue.svg">
   <img alt="C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg">
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange.svg">
@@ -57,13 +57,14 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Self-describing.** The head reports its capabilities (`$CAPS`) and its calibration (`$CAL`), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
 - **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
 - **Smooth, speed-limited motion.** Constant-velocity slew from 1 to 500 °/s, timed from the actual elapsed time so it doesn't speed up or slow down with loop timing.
-- **Safe by default.** The servos are limp at power-up and nothing moves until you explicitly enable it.
+- **Safe by default.** The motors are limp at power-up and nothing moves until you explicitly enable it.
+- **Swap the motors, the board or the link.** The core talks to three small interfaces: an axis (`IAxis`), a platform (clock, serial port, storage) and a byte stream. Two heads ship from the same core: an ESP32-S3 with hobby servos, and a Raspberry Pi Pico with belt-driven steppers. Adding another is one driver class or one platform folder, not a rewrite.
 - **Pluggable protocols (SOLID).** The firmware core knows nothing about any wire format. Protocols are `IProtocol` plug-ins injected at start-up, several can share the USB port, and you can add your own (Pelco-D, G-code, binary, …) without touching owlet's code.
 - **Submodule-friendly.** CMake `owlet::` targets, an ESP-IDF component list, and a `pip`-installable client.
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 326 automated tests: 242 C++ unit and integration tests, plus 84 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
+- **Tested.** 352 automated tests: 268 C++ unit and integration tests, plus 84 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -81,7 +82,9 @@ flowchart LR
     PCA -->|"PWM channel 1"| TILT
 ```
 
-The firmware runs a 100 Hz loop. Each pass it advances both servos (position slew or velocity mode, plus the watchdog), lets the protocol emit time-driven messages (arrival, streamed position, timeouts), then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The ESP32-specific code only connects it to the real USB port, clock and I²C bus.
+The firmware runs a fixed-rate loop (100 Hz on the servo head, 500 Hz on the stepper head). Each pass it advances both axes (position move or velocity mode, plus the watchdog), lets the protocol emit time-driven messages (arrival, streamed position, timeouts), then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The board-specific code only connects it to the real USB port, clock and motor outputs.
+
+The picture above is the servo head. The stepper head swaps the right-hand side for a Raspberry Pi Pico driving two TMC2209 modules; the PC side, the protocol and the core are identical. See [Hardware](#hardware).
 
 ## Object tracking
 
@@ -136,7 +139,18 @@ python tools/python/examples/track_object.py --target person --fov-h 70 --fov-v 
 
 ## Hardware
 
-### Bill of materials
+There are two reference heads. Both speak the same protocol and run the same core, so the client and everything built on it work with either.
+
+| | Servo head | Stepper head |
+|---|---|---|
+| Board | ESP32-S3 Zero | Raspberry Pi Pico (RP2040) |
+| Motors | 2× hobby servo via PCA9685 | 2× NEMA 17 via TMC2209, 3:1 belt |
+| Position | absolute, ±90° | relative: where it is at `enable` is taken as the pose you give |
+| Smallest step | about 0.44° | 0.0375° |
+| Top speed | 500 °/s | 240 °/s (ran clean at 360) |
+| Status | verified on hardware | verified on hardware: pan ±90°, tilt ±60°, up to 240 °/s; not yet run under camera-tracking |
+
+### Servo head: bill of materials
 
 | Qty | Part | Notes |
 |----:|------|-------|
@@ -148,7 +162,7 @@ python tools/python/examples/track_object.py --target person --fov-h 70 --fov-v 
 | — | *Optional:* separate 5 V supply for servos | Recommended once the head carries a load |
 | — | *Optional:* USB-TTL adapter | Only for reading firmware debug logs |
 
-### Wiring
+### Servo head: wiring
 
 ```mermaid
 flowchart LR
@@ -183,6 +197,36 @@ flowchart LR
 
 > **Power note:** two small servos can run off the ESP's USB 5 V for bench testing. Under load, or if the board resets when the servos move (a brown-out), power `V+` from a separate 5 V supply and keep the grounds connected.
 
+### Stepper head: bill of materials
+
+| Qty | Part | Notes |
+|----:|------|-------|
+| 1 | Raspberry Pi Pico or pin-compatible RP2040 board | Powered from USB, which also carries the protocol |
+| 2 | TMC2209 StepStick modules | Step/dir mode; current set with the on-board potentiometer |
+| 2 | NEMA 17 pancake steppers (1.8°, about 23 mm long) | |
+| 2 | GT2 20T pulley (5 mm bore), 60T pulley, 200 mm closed belt | 3:1 reduction per axis |
+| 4 | 625ZZ bearings · 5 mm shafts, 80 mm and 120 mm | |
+| 1 | 12 V supply, 2 A or more | A USB-C PD trigger board set to 12 V works |
+| 2 | 100 µF 25 V capacitors | One per driver; optional if the supply has a large output capacitor on short wires |
+| 1 | LED + resistor | Optional activity light |
+| — | Printed parts | [`mechanical/stepper-head/`](mechanical/stepper-head/) |
+
+### Stepper head: wiring
+
+![Pico + two TMC2209 wiring](docs/wiring/pico-tmc2209/wiring.png)
+
+| Pico pin | Goes to | |
+|----------|---------|---|
+| `GP2` / `GP3` | Pan driver `STEP` / `DIR` | |
+| `GP6` / `GP7` | Tilt driver `DIR` / `STEP` | Note the order: the reverse of the pan pair |
+| `GP8` | `EN` on both drivers | Active low; the firmware keeps it high (motors off) until `enable` |
+| `GP12` / `GP13` | `MS1` / `MS2` on both drivers | Microstep select, set by the firmware (1/16) |
+| `GP22` | Activity LED cathode (`3V3` → resistor → LED → `GP22`) | The pin sinks the LED; lit while the head is moving |
+| `3V3(OUT)` | `VIO` on both drivers | |
+| `GND` | Driver grounds and supply negative | |
+
+12 V goes to `VM` on the drivers only, never to the Pico. Pin tables, the driver pinout and a staged bring-up order are in [`docs/wiring/pico-tmc2209/`](docs/wiring/pico-tmc2209/README.md).
+
 ## Quick start
 
 ### 1. Flash the firmware
@@ -197,6 +241,16 @@ nix develop                 # first run downloads the toolchain; later runs are 
 ```
 
 With more than one Espressif board connected, pass the port: `./build.py --esp --flash /dev/ttyACM1`.
+
+For the **stepper head**, build and load the Pico firmware instead:
+
+```bash
+./build.py --pico --flash   # plug the Pico in and run; no button needed
+```
+
+The script finds the board and asks whatever is running on it to reboot into the bootloader: owlet itself (and anything else built on the pico-sdk USB console) obeys, and so does MicroPython. A blank Pico is already in its bootloader. Only a board running firmware that ignores every request needs `BOOTSEL` held while plugging in, once. Add `--wait 60` to have the script wait for the board to be plugged in. You can also drag `apps/pico-owlet/build/pico_owlet.uf2` onto the `RPI-RP2` drive.
+
+On Linux, picotool needs permission to talk to the board without `sudo`: a udev rule granting access to USB IDs `2e8a:0003` and `2e8a:000a`.
 
 ### 2. The PC client
 
@@ -218,7 +272,9 @@ owlet pos                   # where is it?
 owlet disable               # servos go limp
 ```
 
-The servos boot **limp**, so `enable` is always the first step. See [Safety](#safety).
+The motors boot **limp**, so `enable` is always the first step. See [Safety](#safety).
+
+On the stepper head there is no position sensor, so `enable` cannot know where the head is. Point it straight ahead by hand first, then `owlet enable`: that spot becomes (0, 0), and the soft limits are measured from it. `owlet enable 20 0` instead tells it "you are at pan 20 right now"; a stepper never jumps on enable.
 
 ## Usage
 
@@ -415,16 +471,23 @@ flowchart TB
     TEXT & MINE --> HEAD{{"IPanTilt"}}
     TEXT & MINE --> SINK[/"IByteSink · replies"/]
     HEAD --- PT["PanTilt<br/>or your own mechanism"]
-    PT --> SERVO["Servo"] --> CH{{"IServoChannel"}}
+    PT --> AXIS{{"IAxis · one motor"}}
+    AXIS --- SERVO["Servo"] --> CH{{"IServoChannel"}}
     CH --- PCA["PCA9685 channel<br/>or ESP32 LEDC, …"]
+    AXIS --- STEP["StepperAxis"] --> GEN{{"IStepGenerator"}}
+    GEN --- PIO["Pico PIO<br/>or ESP32 RMT, …"]
+    AXIS --- OTHER["Your motor<br/>DC + encoder, …"]
 ```
 
 | Interface | Implement it to… |
 |-----------|-------------------|
 | `owlet::core::IProtocol` | add a wire protocol (Pelco-D for PTZ software, G-code, a compact binary format, …) |
-| `owlet::core::IPanTilt` | drive a different mechanism (steppers, another servo controller) under every existing protocol |
+| `owlet::hal::IAxis` (+ `IAxisCalibration`) | add a **motor type**. `Servo` and `StepperAxis` are the two built in; a DC motor with an encoder would be a third. The motion policy, calibration, every protocol and the client work with it unchanged |
 | `owlet::hal::IServoChannel` | output servo pulses from something other than a PCA9685 (e.g. ESP32 LEDC) |
-| `owlet::hal::IByteSource` / `IByteSink` | carry the protocol over another transport (UART, TCP, BLE) |
+| `owlet::hal::IStepGenerator` | emit step/dir pulses on another chip (the Pico uses a PIO state machine per motor) |
+| `owlet::hal::IClock` · `ISerialPort` · `IDigitalOutput` · `core::ICalibrationStore` | port to **another board**: implement these few in a `platform/owlet_<board>/` folder and add a wiring-only `main.cpp`. `platform/owlet_pico/` is about 400 lines |
+| `owlet::hal::IByteSource` / `IByteSink` | carry the protocol over **another transport** (UART, TCP, BLE, Wi-Fi). The loop and the protocols only ever see these two |
+| `owlet::core::IPanTilt` | replace the whole two-axis policy (a different kinematic arrangement) under every existing protocol |
 
 A protocol is about 100 lines. It only ever sees `IPanTilt` (what it may ask the head to do) and `IByteSink` (where replies go):
 
@@ -439,7 +502,7 @@ public:
 };
 ```
 
-Then, in `apps/esp32-owlet/main/main.cpp`, run it next to the built-in protocol on the same USB port:
+Then, in the app's `main.cpp` (`apps/esp32-owlet/main/` or `apps/pico-owlet/`), run it next to the built-in protocol on the same USB port:
 
 ```cpp
 static owlet::text::TextProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
@@ -523,8 +586,10 @@ Everything below runs inside `nix develop`.
 ```bash
 ./build.py --host -t          # host build + all tests (C++ and Python)
 ./build.py --host --clean -t  # same, from scratch
-./build.py --esp              # firmware only
+./build.py --esp              # ESP32-S3 servo head: firmware only
 ./build.py --esp --flash      # firmware + flash
+./build.py --pico             # Pico stepper head: firmware only (apps/pico-owlet/build/pico_owlet.uf2)
+./build.py --pico --flash     # firmware + load with picotool
 ```
 
 Run one test suite or test:
@@ -555,21 +620,25 @@ The USB port carries **only** protocol traffic. Firmware logs go to UART0: conne
 
 | Path | What's there |
 |------|--------------|
-| `apps/esp32-owlet/` | ESP-IDF firmware project: entry point and Kconfig |
+| `apps/esp32-owlet/` | ESP-IDF firmware project for the servo head: entry point and Kconfig |
+| `apps/pico-owlet/` | pico-sdk firmware project for the stepper head: entry point, pin map and motion limits |
 | `apps/host-sim/` | `owlet_sim`: the firmware core on a Linux pseudo-terminal |
-| `drivers/owlet_hal/` | Hardware interfaces: I²C, delay, servo channel, serial port, clock |
+| `drivers/owlet_hal/` | Hardware interfaces: axis, axis calibration, servo channel, step generator, digital output, I²C, delay, serial port, clock |
 | `drivers/owlet_pca9685/` | PCA9685 PWM driver |
-| `drivers/owlet_servo/` | Servo model: angle ↔ pulse, speed-limited motion |
+| `drivers/owlet_servo/` | Servo axis: angle ↔ pulse, speed-limited motion |
+| `drivers/owlet_stepper/` | Stepper axis: exact step counting, acceleration-limited motion; TMC2209 standalone helpers; shared enable line |
 | `firmware/common/owlet_core/` | Interfaces (`IPanTilt`, `IProtocol`, `ICalibration`), `PanTilt`, `ControlLoop`, `ProtocolMux`, `Calibrator` |
 | `firmware/common/owlet_text/` | The native text protocol: codec + `TextProtocol` |
 | `platform/owlet_esp32/` | ESP-IDF implementations of the hardware interfaces, NVS calibration store |
+| `platform/owlet_pico/` | pico-sdk implementations: USB CDC, clock, GPIO, PIO step generator, flash calibration store |
+| `mechanical/stepper-head/` | Printable belt-driven head for two NEMA 17 motors: OpenSCAD source and STLs |
 | `simulators/` | Virtual I²C bus + register-level PCA9685 model |
 | `tests/` | GoogleTest suites |
 | `tools/python/` | Client library and `owlet` CLI (`tools/bin/owlet` runs it in `nix develop`) |
-| `docs/` | Design, calibration, dev journal, protocol test vectors |
+| `docs/` | Design, calibration, dev journal, protocol test vectors, wiring diagrams |
 | `build.py` · `flake.nix` | Build/test/flash entry point · reproducible toolchain |
 
-Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers and no dynamic memory, and it builds and runs on a PC. Only `platform/` and `apps/esp32-owlet/` touch ESP-IDF. Read [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and the reasoning behind it.
+Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers and no dynamic memory, and it builds and runs on a PC. Only `platform/` and the two firmware apps touch ESP-IDF or the pico-sdk. Read [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and the reasoning behind it.
 
 ## Troubleshooting
 
@@ -596,11 +665,19 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no ESP-IDF headers
 - [x] Tracking support: velocity mode, watchdog, timestamped pose, clock sync, `Tracker`, `PixelController`
 - [x] On-device calibration and capabilities (`$CAL`, `$CAPS`)
 - [x] Verify velocity mode, watchdog, clock sync and `Tracker` on hardware
+- [x] Motor-neutral axis interface (`IAxis`): the core no longer knows what a servo is
+- [x] Stepper axis with acceleration ramps, and a Raspberry Pi Pico platform
+- [x] First motion of the stepper head: both axes swept and back on their marks
+- [x] Stepper head directions confirmed (pan + = camera's right, tilt + = up)
+- [x] Stepper head on 12 V: speed and acceleration limits measured and set
+- [ ] Run camera-tracking against the stepper head
+- [ ] Home sensors for the stepper head (it has no absolute position today)
 - [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))
 - [ ] Verify the client on Windows and macOS
 - [ ] Separate speed per axis
-- [ ] Mechanical design files for the pan-tilt bracket
+- [x] Mechanical design files for the stepper head ([`mechanical/stepper-head/`](mechanical/stepper-head/))
+- [ ] Mechanical design files for the servo bracket
 
 Progress, decisions and test evidence are logged in [`docs/DEV_JOURNAL.md`](docs/DEV_JOURNAL.md).
 

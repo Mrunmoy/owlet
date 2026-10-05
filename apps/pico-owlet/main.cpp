@@ -58,16 +58,17 @@ constexpr uint32_t kFullStepsPerRev = 200; // 1.8° motors
 constexpr Microsteps kMicrosteps = Microsteps::k16;
 constexpr float kBeltReduction = 3.0f; // 20T motor pulley : 60T output
 
-// Flip if an axis turns the wrong way: pan + must be right, tilt + up.
-// Not yet confirmed on the reference head.
-constexpr bool kPanReversed = false;
-constexpr bool kTiltReversed = false;
+// Flip if an axis turns the wrong way. Pan + must be the camera's own right
+// (the left of someone facing it) and tilt + up. Both confirmed by eye on the
+// reference head.
+constexpr bool kPanReversed = true;
+constexpr bool kTiltReversed = true;
 
-// Deliberately gentle: proven on a 5 V bench supply up to 30 °/s, with no
-// lost steps. Raise them once the head runs from 12 V; clients read the
-// limits with $CAPS and adapt.
-constexpr float kMaxSpeedDegPerSec = 120.0f;
-constexpr float kAccelDegPerSec2 = 480.0f;
+// About two thirds of what ran clean on the reference head: 360 °/s and
+// 1920 °/s² on both axes at once, on 12 V, with no lost steps
+// (docs/CALIBRATION.md). Clients read the limits with $CAPS and adapt.
+constexpr float kMaxSpeedDegPerSec = 240.0f;
+constexpr float kAccelDegPerSec2 = 1440.0f;
 
 constexpr StepperAxis::Config makeAxis(bool reversed, float limitDeg, float travelDeg)
 {

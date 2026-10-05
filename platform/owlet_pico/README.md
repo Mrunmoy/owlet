@@ -31,4 +31,6 @@ On a USB-C Pico clone: enumerates as `2e8a:000a`, the client auto-detects it, `p
 
 With motors attached (5 V supply): both axes move smoothly and quietly; pan swept ±90° and tilt ±60° and returned to the centre mark, so the step count, direction pin and pulse timing are right on both state machines. The activity LED (wired to sink into GP22) lights for exactly the duration of a move.
 
-**Still to check:** that a calibration save survives a power cycle; behaviour above 30 °/s and on 12 V.
+On 12 V: both axes clean at up to 360 °/s and 1920 °/s², separately and together, returning to their marks. A saved calibration survives a reset, and a reset to factory erases it.
+
+**Still to check:** a calibration save across a full power cycle; where steps are actually lost (the head was never pushed that far).

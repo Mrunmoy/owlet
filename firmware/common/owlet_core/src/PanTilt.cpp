@@ -9,16 +9,8 @@ namespace owlet::core
 using ::owlet::hal::IAxis;
 
 PanTilt::PanTilt(IAxis& pan, IAxis& tilt, IEventSink* events, IHoming* homing)
-    : m_pan(pan), m_tilt(tilt), m_events(events), m_homing(homing)
+    : EventNotifier(events), m_pan(pan), m_tilt(tilt), m_homing(homing)
 {
-}
-
-void PanTilt::announce(EventId id, uint8_t axis, uint16_t arg)
-{
-    if (m_events != nullptr)
-    {
-        (void) m_events->post(id, axis, arg);
-    }
 }
 
 PanTilt::Result PanTilt::mayMove() const
@@ -40,7 +32,7 @@ void PanTilt::losePosition(uint8_t axis)
     m_tilt.halt();
     m_arrivalOwed = false;
     m_trust       = Trust::Lost;
-    announce(EventId::PositionLost, axis, 0);
+    notifyPositionLost(axis);
 }
 
 PanTilt::Result PanTilt::seekHome()
@@ -68,11 +60,11 @@ void PanTilt::serviceHoming()
     if (m_homing->outcome() == IHoming::Outcome::Done)
     {
         m_trust = Trust::Trusted;
-        announce(EventId::Homed);
+        notifyHomed();
         return;
     }
     m_trust = Trust::Lost;
-    announce(EventId::HomingFailed, m_homing->failedAxis(), m_homing->failureCode());
+    notifyHomingFailed(m_homing->failedAxis(), m_homing->failureCode());
 }
 
 // ── Power ───────────────────────────────────────────────────────────────────
@@ -283,7 +275,14 @@ TickStatus PanTilt::tick(uint32_t dtMs)
     if (status.busOk == m_busFault)
     {
         m_busFault = !status.busOk;
-        announce(m_busFault ? EventId::BusFault : EventId::BusOk);
+        if (m_busFault)
+        {
+            notifyBusFault();
+        }
+        else
+        {
+            notifyBusOk();
+        }
     }
 
     // The motion for this step happens first: a refreshed command is honoured
@@ -302,7 +301,7 @@ TickStatus PanTilt::tick(uint32_t dtMs)
             m_pan.stop();
             m_tilt.stop();
             status.watchdogTripped = true;
-            announce(EventId::WatchdogExpired);
+            notifyWatchdogExpired();
         }
     }
     if (m_trust == Trust::Homing)
@@ -316,7 +315,7 @@ TickStatus PanTilt::tick(uint32_t dtMs)
     if (m_arrivalOwed && state() == State::Holding)
     {
         m_arrivalOwed = false;
-        announce(EventId::Arrived);
+        notifyArrived();
     }
     return status;
 }

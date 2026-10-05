@@ -7,9 +7,9 @@
 namespace owlet::platform::esp32
 {
 
-// IDelayProvider backed by ESP-IDF timing primitives. Short delays (< 1 ms)
-// use esp_rom_delay_us for deterministic busy-waiting; longer delays fall
-// through to vTaskDelay so the scheduler can run other tasks.
+/// IDelayProvider backed by ESP-IDF timing primitives. Short delays (< 1 ms)
+/// use esp_rom_delay_us for deterministic busy-waiting; longer delays fall
+/// through to vTaskDelay so the scheduler can run other tasks.
 class Esp32Delay final : public ::owlet::hal::IDelayProvider
 {
 public:

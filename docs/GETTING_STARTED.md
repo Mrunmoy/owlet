@@ -99,6 +99,9 @@ No button is needed. The script finds the board and asks whatever is running on 
 
 **Servo head (ESP32-S3):**
 
+> **The servo head is untested on the current firmware.** It was last run on real hardware with firmware 0.3.0. Everything added since (the motor-neutral axis layer, events, trouble codes, limit switches) builds for the ESP32-S3 and passes the PC tests and the simulator, which use the servo code, but it has not been flashed to a servo head again. Treat this path as unverified until someone re-runs it: `./build.py --esp --flash`, then `owlet selftest`. The stepper head is the one in active use.
+
+
 ```bash
 ./build.py --esp --flash
 ```
@@ -167,8 +170,8 @@ Positive pan turns the camera to its own right; positive tilt points it up.
 | `NAK,MOVE,RNG` | The target is outside the soft limits: `owlet limits`. |
 | `owlet diag` says `no driver data` | Stepper head: the 12 V motor supply is off, or the drivers' UART wires are missing. The head still works without them. |
 | A stepper axis holds firmly but never turns | Its `STEP` wire is not reaching the driver. Check it against the [wiring diagram](wiring/pico-tmc2209/wiring.png); swapped `STEP`/`DIR` gives exactly this. |
-| An axis turns the wrong way | Stepper: flip `kPanReversed` / `kTiltReversed` in `apps/pico-owlet/main.cpp`. Servo: `owlet cal <axis> --reverse`. |
-| The head ends up off its marks | Steps were lost: lower the speed or acceleration in `apps/pico-owlet/main.cpp`, or check for something binding. Then re-centre and re-enable. |
+| An axis turns the wrong way | Stepper: flip `kPanReversed` / `kTiltReversed` in `apps/pico-owlet/board.hpp`. Servo: `owlet cal <axis> --reverse`. |
+| The head ends up off its marks | Steps were lost: lower the speed or acceleration in `apps/pico-owlet/board.hpp`, or check for something binding. Then re-centre and re-enable. |
 | The Pico's on-board LED is not flashing once a second | The firmware is not running: reflash. |
 
 ## 8. Orientation for contributors
@@ -184,7 +187,7 @@ For anyone, or anything, about to change the code.
 | `firmware/common/owlet_core/` | Motion policy, control loop, calibration: no hardware, no protocol |
 | `firmware/common/owlet_text/` | The text protocol |
 | `platform/owlet_pico/`, `platform/owlet_esp32/` | The only code that touches a vendor SDK |
-| `apps/pico-owlet/`, `apps/esp32-owlet/`, `apps/host-sim/` | `main.cpp` files that build objects and connect them, and nothing else |
+| `apps/pico-owlet/`, `apps/esp32-owlet/`, `apps/host-sim/` | `main.cpp` files that build objects and connect them, and nothing else. The Pico head's pins, motors, speeds and limits are in `apps/pico-owlet/board.hpp` |
 | `tests/`, `tools/python/tests/` | C++ and Python tests |
 | `tools/python/owlet/` | The PC client and `owlet` command |
 | `docs/DESIGN.md` | Architecture, protocol reference, behaviour |

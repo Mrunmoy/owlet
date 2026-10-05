@@ -5,9 +5,9 @@
 namespace owlet
 {
 
-// One enable line wired to several motor drivers. Each axis gets its own
-// User; the line is asserted while any of them wants it, so an axis can't
-// cut power from under another that is still moving.
+/// One enable line wired to several motor drivers. Each axis gets its own
+/// User; the line is asserted while any of them wants it, so an axis can't
+/// cut power from under another that is still moving.
 class SharedEnable
 {
 public:

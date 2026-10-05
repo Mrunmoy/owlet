@@ -1,5 +1,6 @@
 #pragma once
 
+#include "owlet/core/EventNotifier.hpp"
 #include "owlet/core/IEventSink.hpp"
 #include "owlet/core/IHoming.hpp"
 #include "owlet/core/IPanTilt.hpp"
@@ -28,12 +29,15 @@ namespace owlet::core
 ///
 /// Once the position is lost the head holds where it is and refuses motion
 /// (Result::Untrusted) until it is homed, or disabled and enabled at a pose.
-class PanTilt final : public IPanTilt, public ITickable
+class PanTilt final : public IPanTilt, public ITickable, private EventNotifier
 {
 public:
     /// Longest motion step per tick: a starved loop resumes without lurching.
     static constexpr uint32_t kMaxStepMs = 100;
 
+    /// @param pan    The axis that turns the head left and right.
+    /// @param tilt   The axis that tips it up and down.
+    /// @param events Optional: where the head announces what it notices.
     /// @param homing Optional: how this head finds its reference by itself.
     PanTilt(::owlet::hal::IAxis& pan,
             ::owlet::hal::IAxis& tilt,
@@ -75,7 +79,7 @@ public:
 private:
     [[nodiscard]] static bool inLimits(const ::owlet::hal::IAxis& axis, float deg);
     void releaseBoth();
-    void announce(EventId id, uint8_t axis = Event::kHead, uint16_t arg = 0);
+    
     void losePosition(uint8_t axis);
     void serviceHoming();
     /// Ok if a motion command may run now; otherwise why not.
@@ -95,7 +99,7 @@ private:
     ::owlet::hal::IAxis& m_pan;
     ::owlet::hal::IAxis& m_tilt;
     uint32_t             m_watchdogMs{kDefaultWatchdogMs};
-    IEventSink*          m_events;
+    
     IHoming*             m_homing;
     Trust                m_trust{Trust::Trusted};
     uint32_t             m_velocityAgeMs{0};  ///< time since the last setVelocity()

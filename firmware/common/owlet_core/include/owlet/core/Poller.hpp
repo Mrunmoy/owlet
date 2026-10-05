@@ -10,10 +10,10 @@
 namespace owlet::core
 {
 
-// Gives background housekeeping (hal::IPollable) a slice of every loop pass,
-// after motion. Like ActivityIndicator it wraps the motion layer as an
-// ITickable, so ControlLoop needs to know nothing about it. Null entries are
-// skipped.
+/// Gives background housekeeping (hal::IPollable) a slice of every loop pass,
+/// after motion. Like ActivityIndicator it wraps the motion layer as an
+/// ITickable, so ControlLoop needs to know nothing about it. Null entries are
+/// skipped.
 template <std::size_t N>
 class Poller final : public ITickable
 {

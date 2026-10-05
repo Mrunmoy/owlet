@@ -3,7 +3,7 @@
 #include "owlet/core/ICalibration.hpp"
 #include "owlet/core/EventBus.hpp"
 #include "owlet/core/IDiagnostics.hpp"
-#include "owlet/core/IEventObserver.hpp"
+#include "owlet/core/EventDelegate.hpp"
 #include "owlet/core/IPanTilt.hpp"
 #include "owlet/core/IProtocol.hpp"
 #include "owlet/core/LoopStats.hpp"
@@ -26,9 +26,9 @@ namespace owlet::text
 //
 /// Unsolicited lines are written in answer to events, so the protocol must
 /// be attached to the head's bus: $ARRIVED, $TIMEOUT and $ERR,BUS as always,
-/// and $EVT,<name>,<axis>,<arg> for everything else unless $EVENTS,0 has
+/// and `$EVT,<name>,<axis>,<arg>` for everything else unless $EVENTS,0 has
 /// turned those off.
-class TextProtocol final : public ::owlet::core::IProtocol, public ::owlet::core::IEventObserver
+class TextProtocol final : public ::owlet::core::IProtocol, public ::owlet::core::EventDelegate
 {
 public:
     static constexpr uint32_t kMaxStreamHz = 50;
@@ -59,15 +59,54 @@ public:
     void begin(uint32_t nowMs) override;
     void onTick(uint32_t nowMs) override;
 
-    // ── IEventObserver ──────────────────────────────────────────────────────
-
-    void onEvent(const ::owlet::core::Event& event) override;
 
 private:
     using Result = ::owlet::core::IPanTilt::Result;
 
     void handleFrame(std::string_view frame);
-    void execute(const Request& req);
+    void dispatch(const Request& req);
+
+    // ── Commands: one handler per request ───────────────────────────────────
+
+    void handlePing(const Request& req);
+    void handleEnable(const Request& req);
+    void handleDisable(const Request& req);
+    void handleMove(const Request& req);
+    void handleNudge(const Request& req);
+    void handleHome(const Request& req);
+    void handleStop(const Request& req);
+    void handleSpeed(const Request& req);
+    void handlePos(const Request& req);
+    void handleStream(const Request& req);
+    void handleVel(const Request& req);
+    void handleWatchdog(const Request& req);
+    void handleClock(const Request& req);
+    void handleCaps(const Request& req);
+    void handleCal(const Request& req);
+    void handleDiag(const Request& req);
+    void handleEvents(const Request& req);
+    void handleDtc(const Request& req);
+    void handleSeek(const Request& req);
+    void handleStat(const Request& req);
+    void handleLimits(const Request& req);
+
+    // ── EventDelegate: what the head announces ──────────────────────────────
+
+    void onArrived() override;
+    void onWatchdogExpired() override;
+    void onBusFault() override;
+    void onBusOk() override;
+    void onLimitHit(uint8_t axis, ::owlet::core::LimitEnd end) override;
+    void onPositionLost(uint8_t axis) override;
+    void onStalled(uint8_t axis) override;
+    void onHomed() override;
+    void onHomingFailed(uint8_t axis, uint16_t reason) override;
+    void onDriverOnline(uint8_t axis) override;
+    void onDriverOffline(uint8_t axis) override;
+    void onDriverFaultChanged(uint8_t axis, uint16_t faults) override;
+    void onEventsLost(uint16_t count) override;
+
+    // ── Replies ─────────────────────────────────────────────────────────────
 
     void sendPos();
     void sendAck(Command cmd);
@@ -75,11 +114,10 @@ private:
     void sendErr(std::string_view code);
     void sendResult(Command cmd, Result result);
     void sendVersioned(std::string_view name);
-    void executeCal(const Request& req);
     void sendCal(::owlet::core::Axis axis, std::string_view name);
     void sendDiag(::owlet::core::Axis axis, std::string_view name);
-    void sendEvent(const ::owlet::core::Event& event);
-    void executeDtc(const Request& req);
+    void sendEvt(std::string_view name, uint8_t axis, std::string_view arg);
+    void sendEvt(std::string_view name, uint8_t axis, uint16_t arg);
     void flush();
 
     ::owlet::hal::IByteSink& m_out;

@@ -50,6 +50,7 @@
             # Raspberry Pi Pico (RP2040, Cortex-M0+) stepper head.
             gcc-arm-embedded
             picotool
+            doxygen
 
             cmake
             ninja

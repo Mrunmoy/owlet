@@ -3,7 +3,7 @@
 Diagram: `wiring.png` (or `wiring.svg`). Regenerate with `python3 make_wiring.py`, then `convert -density 96 wiring.svg wiring.png`.
 
 The firmware for this wiring is `apps/pico-owlet` (`./build.py --pico --flash`). The pin numbers
-below are the constants at the top of `apps/pico-owlet/main.cpp`; change both together.
+below are the constants in `apps/pico-owlet/board.hpp`; change both together.
 
 ## Driver pinout (top view, potentiometer side up, pins down)
 
@@ -101,12 +101,39 @@ Each stage only needs the one before it to have worked.
 2. **12 V on, no motors:** set both current limits (step 2 of the bring-up order below).
 3. **Motors connected:** point the head forward, `owlet enable`, then small moves
    (`owlet move 10 0 --wait`). Pan + must turn right and tilt + must tilt up; if not, flip
-   `kPanReversed` / `kTiltReversed` in `main.cpp`, or swap the two wires of one coil.
+   `kPanReversed` / `kTiltReversed` in `board.hpp`, or swap the two wires of one coil.
 4. **Limits:** find the safe travel by hand and store it with `owlet cal`.
 
-## Reserved for later
+## Limit switches (not fitted yet)
 
-| Pico pin   | Purpose |
-|------------|---------|
-| GP10, GP11 | Pan and tilt home switches |
-| GP14, GP15 | Free |
+Two per axis, one at each end of travel. The firmware supports them but leaves these pins
+alone until `kLimitSwitchesFitted` is set to `true` in `apps/pico-owlet/board.hpp`.
+
+| Pico pin | Switch |
+|----------|--------|
+| GP10 | Pan, negative end (the camera's left) |
+| GP11 | Pan, positive end (the camera's right) |
+| GP14 | Tilt, negative end (down) |
+| GP15 | Tilt, positive end (up) |
+
+**Wire each switch normally-closed, between its pin and ground.** Use the switch's `COM` and
+`NC` terminals; leave `NO` unconnected. No resistor is needed: the Pico's own pull-up is
+switched on. The pin reads low while the switch is at rest and goes high when it is pressed.
+It also goes high if a wire breaks or a plug comes out, so a wiring fault stops the axis
+instead of letting it run into the end of its travel.
+
+A switch wired normally-open works too: change `kSwitchPolarity` in `board.hpp` to
+`ActiveLow`. A broken wire then goes unnoticed, which is why normally-closed is preferred.
+
+Mount each switch so its lever is pressed a few degrees **before** the mechanism's hard stop,
+and so the moving part can travel a little past the trip point without crushing the lever.
+
+Fitting order, once they arrive:
+
+1. Wire one switch. With `kLimitSwitchesFitted` still `false`, nothing changes; check the
+   wiring with a multimeter (closed at rest, open when pressed).
+2. Wire all four, set `kLimitSwitchesFitted = true`, and flash.
+3. With the motors off, press each switch by hand and run `owlet dtc`: a switch that is read
+   shows up as `30 LIMIT` on the right axis and end.
+4. `owlet seek`. The head finds both ends of tilt, then pan, and stops at the middle.
+

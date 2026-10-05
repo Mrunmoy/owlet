@@ -11,18 +11,18 @@
 namespace owlet
 {
 
-// A step/dir stepper as a hal::IAxis.
+/// A step/dir stepper as a hal::IAxis.
 //
-// Position is an exact integer step count; degrees are derived from it. Each
-// tick the axis works out how many steps the next period needs and hands
-// that burst to an IStepGenerator, which spaces the pulses in hardware.
+/// Position is an exact integer step count; degrees are derived from it. Each
+/// tick the axis works out how many steps the next period needs and hands
+/// that burst to an IStepGenerator, which spaces the pulses in hardware.
 //
-// Unlike a servo, a stepper stalls if its rate jumps, so every change of
-// speed is limited to the configured acceleration: moves ramp up, ramp down
-// onto the target, and stop() brakes to rest instead of halting dead.
+/// Unlike a servo, a stepper stalls if its rate jumps, so every change of
+/// speed is limited to the configured acceleration: moves ramp up, ramp down
+/// onto the target, and stop() brakes to rest instead of halting dead.
 //
-// There is no absolute position sensor. engageAt(deg) powers the driver and
-// *names* the current shaft position `deg`; it never moves the motor.
+/// There is no absolute position sensor. engageAt(deg) powers the driver and
+/// *names* the current shaft position `deg`; it never moves the motor.
 class StepperAxis final : public ::owlet::hal::IAxis, public ::owlet::hal::IAxisCalibration
 {
 public:
@@ -30,7 +30,7 @@ public:
     {
         // Microsteps per degree at the output, after any gearing.
         float stepsPerDeg = 9600.0f / 360.0f;
-        bool reversed = false; // flip if + turns the wrong way
+        bool reversed = false; ///< flip if + turns the wrong way
         float maxSpeedDegPerSec = 180.0f;
         float accelDegPerSec2 = 720.0f;
         // Factory soft limits.
@@ -51,23 +51,28 @@ public:
 
     static constexpr float kMinSpeedDegPerSec = 1.0f;
     static constexpr float kDefaultSpeedDegPerSec = 90.0f;
-    // Slack for "inside the limits": one reporting step (0.1°).
+    /// Slack for "inside the limits": one reporting step (0.1°).
     static constexpr float kPositionToleranceDeg = 0.1f;
-    // Longest period one tick will step for. A wrapped or corrupted dt then
-    // can't turn into a lurch or overflow the step arithmetic.
+    /// Longest period one tick will step for. A wrapped or corrupted dt then
+    /// can't turn into a lurch or overflow the step arithmetic.
     static constexpr uint32_t kMaxTickMs = 100;
-    // A generator that refuses every burst for this long is a fault.
+    /// A generator that refuses every burst for this long is a fault.
     static constexpr uint32_t kStallReportMs = 200;
-    // Soft limits and travel are kept within this, so degrees × steps-per-
-    // degree always fits the 32-bit step count.
+    /// Soft limits and travel are kept within this, so degrees × steps-per-
+    /// degree always fits the 32-bit step count.
     static constexpr float kMaxTravelDeg = 3600.0f;
 
-    /// @param limits Switches the axis must never step into. While one is
-    ///               pressed, steps toward it are withheld and the axis
-    ///               stops dead; steps away from it are unaffected.
+    /// An axis with no limit switches.
     StepperAxis(::owlet::hal::IStepGenerator& steps,
                 ::owlet::hal::IDigitalOutput& enable,
                 const Config& config);
+
+    /// @param steps  Makes the step and direction pulses.
+    /// @param enable Powers the driver.
+    /// @param config The mechanism: steps per degree, speeds, limits.
+    /// @param limits Switches the axis must never step into. While one is
+    ///               pressed, steps toward it are withheld and the axis
+    ///               stops dead; steps away from it are unaffected.
     StepperAxis(::owlet::hal::IStepGenerator& steps,
                 ::owlet::hal::IDigitalOutput& enable,
                 const Config& config,
@@ -84,16 +89,16 @@ public:
     // ── IAxis: motion ───────────────────────────────────────────────────────
 
     void setTarget(float deg) override;
-    // Brakes at the configured acceleration; the target becomes the point
-    // where the axis will come to rest.
+    /// Brakes at the configured acceleration; the target becomes the point
+    /// where the axis will come to rest.
     void stop() override;
     void halt() override;
     void setVelocity(float degPerSec) override;
     void setSpeed(float degPerSec) override;
-    // A burst the generator can't take yet is not lost: the profile simply
-    // continues from the unchanged step count next tick. False only once the
-    // generator has refused everything for kStallReportMs, which means the
-    // pulse hardware isn't running and the axis is not really moving.
+    /// A burst the generator can't take yet is not lost: the profile simply
+    /// continues from the unchanged step count next tick. False only once the
+    /// generator has refused everything for kStallReportMs, which means the
+    /// pulse hardware isn't running and the axis is not really moving.
     [[nodiscard]] bool tick(uint32_t dtMs) override;
 
     // ── IAxis: introspection ────────────────────────────────────────────────
@@ -138,8 +143,8 @@ public:
     }
 
     // ── IAxisCalibration ────────────────────────────────────────────────────
-    // Only the soft limits are adjustable; the drive numbers are always zero.
-    // Steps per degree and direction are properties of the build (Config).
+    /// Only the soft limits are adjustable; the drive numbers are always zero.
+    /// Steps per degree and direction are properties of the build (Config).
 
     [[nodiscard]] ::owlet::hal::AxisCalibration calibration() const override
     {
@@ -150,7 +155,7 @@ public:
         return ::owlet::hal::AxisCalibration{0, 0, 0, m_cfg.minDeg, m_cfg.maxDeg};
     }
     [[nodiscard]] bool acceptsCalibration(const ::owlet::hal::AxisCalibration& cal) const override;
-    // Limits never move the shaft, so nothing needs the axis released.
+    /// Limits never move the shaft, so nothing needs the axis released.
     [[nodiscard]] bool calibrationNeedsRelease(const ::owlet::hal::AxisCalibration&) const override
     {
         return false;
@@ -190,11 +195,11 @@ private:
     int32_t m_maxSteps{0};
     int32_t m_positionSteps{0};
     int32_t m_targetSteps{0};
-    float m_rate{0.0f};     // current rate, steps/s, signed
-    float m_fraction{0.0f}; // part-step carried to the next tick
+    float m_rate{0.0f};     ///< current rate, steps/s, signed
+    float m_fraction{0.0f}; ///< part-step carried to the next tick
     float m_speedDegPerSec{kDefaultSpeedDegPerSec};
     float m_velocityDegPerSec{0.0f};
-    uint32_t m_refusedMs{0}; // how long the generator has refused bursts
+    uint32_t m_refusedMs{0}; ///< how long the generator has refused bursts
     bool m_engaged{false};
     bool m_velocityMode{false};
     bool m_blocked{false};

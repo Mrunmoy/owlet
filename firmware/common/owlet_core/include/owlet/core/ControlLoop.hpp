@@ -25,7 +25,7 @@ class ControlLoop
 {
 public:
     static constexpr std::size_t kReadChunk           = 64;
-    static constexpr std::size_t kMaxChunksPerService = 4;  // 256 B per 10 ms ≈ 25 KB/s
+    static constexpr std::size_t kMaxChunksPerService = 4;  ///< 256 B per 10 ms ≈ 25 KB/s
 
     /// `events` is optional: a loop without one delivers no events.
     ControlLoop(::owlet::hal::IByteSource& input,

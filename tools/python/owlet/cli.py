@@ -93,9 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("ports", help="list candidate owlet serial ports")
     sub.add_parser("ping", help="check the link and show versions")
-    en = sub.add_parser("enable", help="energise servos (optionally at a pose)")
+    en = sub.add_parser("enable", help="energise the motors (optionally at a pose)")
     en.add_argument("pose", nargs="*", type=float, metavar="DEG")
-    sub.add_parser("disable", help="servos off (limp)")
+    sub.add_parser("disable", help="motors off (limp)")
     for name, help_ in (("move", "absolute move"), ("nudge", "relative move")):
         m = sub.add_parser(name, help=help_)
         m.add_argument("pan", type=float)

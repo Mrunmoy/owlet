@@ -11,12 +11,12 @@ namespace owlet::text
 enum class FrameStatus : uint8_t
 {
     Ok,
-    Syntax,     // not of the form $NAME[,field]*HH
-    Checksum,   // well-formed but checksum mismatch
+    Syntax,     ///< not of the form $NAME[,field]*HH
+    Checksum,   ///< well-formed but checksum mismatch
 };
 
-// A decoded frame. Views point into the caller's frame buffer, so a Sentence
-// is only valid while that buffer is unchanged.
+/// A decoded frame. Views point into the caller's frame buffer, so a Sentence
+/// is only valid while that buffer is unchanged.
 struct Sentence
 {
     static constexpr std::size_t kMaxFields  = 8;
@@ -27,7 +27,7 @@ struct Sentence
     std::size_t                              fieldCount{0};
 };
 
-// `frame` is '$' through the two checksum digits, without CR/LF.
+/// `frame` is '$' through the two checksum digits, without CR/LF.
 [[nodiscard]] FrameStatus decodeSentence(std::string_view frame, Sentence& out);
 
 } // namespace owlet::text

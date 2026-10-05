@@ -7,7 +7,7 @@
 namespace owlet::platform::pico
 {
 
-// Blocking delays on the pico-sdk sleep functions.
+/// Blocking delays on the pico-sdk sleep functions.
 class PicoDelay final : public ::owlet::hal::IDelayProvider
 {
 public:

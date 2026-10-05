@@ -84,6 +84,25 @@ public:
 template <std::size_t N> class EventBus;   // owns the queue, holds std::array<IEventObserver*, N>
 ```
 
+In practice nobody writes `onEvent` or posts a raw event. Two thin classes give every event a name at both ends:
+
+```cpp
+class PanTilt : ..., private EventNotifier        // announces
+{
+    ...
+    notifyArrived();
+    notifyPositionLost(axis);
+};
+
+class TextProtocol : ..., public EventDelegate    // reacts
+{
+    void onArrived() override;
+    void onLimitHit(uint8_t axis, LimitEnd end) override;
+};
+```
+
+`EventNotifier` turns `notifyXxx(...)` into a posted event; `EventDelegate` turns a delivered event back into `onXxx(...)`, and a class overrides only the ones it wants. The same rule names the protocol's commands, one `handleXxx` each. So: **`handleXxx`** does what was asked, **`notifyXxx`** says what happened, **`onXxx`** reacts.
+
 Observers are attached once, in `main.cpp` during start-up, in the order they should hear events: motion policy first, then homing, then protocols, then indicators. The order is part of the design: a protocol must see the state *after* the motion policy has reacted. Observers may post new events from a handler; those are delivered after the current one, never inside it, so there is no re-entrancy.
 
 ### 3.4 The loop
@@ -188,7 +207,7 @@ Each step leaves every test passing and the head working.
 3. **Done.** `Tmc2209Monitor` tells a listener when its chip comes, goes or changes its faults; `core::AxisEventRelay` turns that into `DriverOnline`, `DriverOffline`, `DriverFaultChanged` (drivers do not depend on the event types). `$EVT`, `$EVENTS`, `$STAT` and the Python signals are in. Still to do from this step: a way to inject a limit hit or a fault into `owlet_sim`, and a check with the motor supply on that the open-coil bits do not make `FAULT` chatter between standstill and motion.
 4. **Done in code; waiting for the switches.** `IStepGenerator::halt()` / `resume()`; `core::LimitTrip` runs in a switch's interrupt, halts the pulses and posts `LimitHit`; `StepperAxis` withholds steps toward a pressed switch, and on finding its generator halted ends the move, marks itself blocked and resumes the generator; `PanTilt` turns a blocked axis into `PositionLost` and refuses motion until `SEEK` or a fresh `ENABLE,<pan>,<tilt>`; `HeadHoming` homes tilt then pan. In the Pico app all of it sits behind `kLimitSwitchesFitted = false`. Two switches per axis (owner, 2026-10-05). The one change from the plan: the axis, not the homing routine, resumes a halted generator, so homing needs no special case.
 5. **Done, bar one item.** `CAL,SAVE` is refused while moving and `$STAT` carries the loop counters. Splitting the TMC2209 exchange is not done. First measurement on the Pico, with the motor supply off so the drivers were only being probed: no late pass in five seconds idle and two moves (longest gap 3 ms), one late pass of 4 ms during a second of velocity mode, and a 13 ms gap for a flash save at rest. The 4 ms pass is probably a driver probe waiting out its reply timeout, which is the blocking exchange this item is about; it needs measuring again with the drivers powered before deciding how to split it.
-6. Board description file; self-test additions.
+6. **Board file done:** `apps/pico-owlet/board.hpp` holds the pins, polarities, mechanism, driver settings, speeds, limits and switch pins. Self-test additions (switch wiring, homing repeatability, the `$STAT` counters) wait for the switches, since two of the three need them.
 7. Stall detection.
 
 Headers touched along the way get their documentation converted to Doxygen, in the header only.

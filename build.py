@@ -181,6 +181,13 @@ def build_pico(flash: bool, clean: bool, wait_seconds: float) -> None:
         flash_pico(uf2, wait_seconds)
 
 
+def build_docs() -> None:
+    """API reference from the headers. Any Doxygen warning fails the build."""
+    (REPO_ROOT / "build" / "docs").mkdir(parents=True, exist_ok=True)
+    run("doxygen Doxyfile", cwd=REPO_ROOT)
+    print(f"docs: {REPO_ROOT / 'build' / 'docs' / 'html' / 'index.html'}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="owlet build orchestrator")
     p.add_argument("--host", action="store_true",
@@ -189,6 +196,8 @@ def main() -> None:
                    help="build ESP32-S3 firmware")
     p.add_argument("--pico", action="store_true",
                    help="build Raspberry Pi Pico firmware")
+    p.add_argument("--docs", action="store_true",
+                   help="build the API reference with Doxygen into build/docs/html")
     p.add_argument("-t", "--test", action="store_true",
                    help="run host tests after building")
     p.add_argument("--flash", metavar="PORT", nargs="?", const="auto",
@@ -205,9 +214,11 @@ def main() -> None:
     if args.flash and not args.pico:
         args.esp = True
 
-    if not (args.host or args.esp or args.pico):
-        p.error("specify --host, --esp, --pico, or a combination")
+    if not (args.host or args.esp or args.pico or args.docs):
+        p.error("specify --host, --esp, --pico, --docs, or a combination")
 
+    if args.docs:
+        build_docs()
     if args.host:
         build_host(run_tests=args.test, clean=args.clean)
     if args.esp:

@@ -12,21 +12,21 @@
 namespace owlet::platform::esp32
 {
 
-// ESP-IDF 5.x I²C master-driver implementation of II2CBus.
+/// ESP-IDF 5.x I²C master-driver implementation of II2CBus.
 //
-// The new ESP-IDF I²C API is device-centric: each slave gets its own
-// `i2c_master_dev_handle_t`. We keep a small fixed-size cache indexed by
-// 7-bit address; the first transaction to a given address adds a device
-// handle lazily, and subsequent transactions reuse it.
+/// The new ESP-IDF I²C API is device-centric: each slave gets its own
+/// `i2c_master_dev_handle_t`. We keep a small fixed-size cache indexed by
+/// 7-bit address; the first transaction to a given address adds a device
+/// handle lazily, and subsequent transactions reuse it.
 class Esp32I2CBus final : public ::owlet::hal::II2CBus
 {
 public:
     struct Config
     {
         i2c_port_t port              = I2C_NUM_0;
-        gpio_num_t sdaPin            = GPIO_NUM_1;   // Waveshare ESP32-S3 Zero: GP1
-        gpio_num_t sclPin            = GPIO_NUM_2;   // Waveshare ESP32-S3 Zero: GP2
-        uint32_t   clockHz           = 100'000U;     // standard-mode I²C
+        gpio_num_t sdaPin            = GPIO_NUM_1;   ///< Waveshare ESP32-S3 Zero: GP1
+        gpio_num_t sclPin            = GPIO_NUM_2;   ///< Waveshare ESP32-S3 Zero: GP2
+        uint32_t   clockHz           = 100'000U;     ///< standard-mode I²C
         bool       enableInternalPullups = true;
     };
 
@@ -36,10 +36,10 @@ public:
     Esp32I2CBus(const Esp32I2CBus&)            = delete;
     Esp32I2CBus& operator=(const Esp32I2CBus&) = delete;
 
-    // Initialise the master bus with a caller-supplied config.
+    /// Initialise the master bus with a caller-supplied config.
     [[nodiscard]] bool init(Config cfg);
 
-    // Convenience: initialise with the default Config (GP1/GP2, 100 kHz).
+    /// Convenience: initialise with the default Config (GP1/GP2, 100 kHz).
     [[nodiscard]] bool init();
 
     // ── II2CBus ─────────────────────────────────────────────────────────────
@@ -51,11 +51,11 @@ public:
 
 private:
     static constexpr std::size_t kMaxDevices   = 8;
-    // One register byte + N payload bytes. 16 is enough for LED-block
-    // bursts (4 bytes) with slack for future multi-channel batch writes.
+    /// One register byte + N payload bytes. 16 is enough for LED-block
+    /// bursts (4 bytes) with slack for future multi-channel batch writes.
     static constexpr std::size_t kMaxTxBytes   = 17;
     static constexpr uint32_t    kProbeTimeoutMs = 100U;
-    static constexpr int         kTransactionTimeoutMs = -1; // wait forever
+    static constexpr int         kTransactionTimeoutMs = -1; ///< wait forever
 
     struct DeviceSlot
     {

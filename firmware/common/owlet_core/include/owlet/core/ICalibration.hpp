@@ -13,23 +13,23 @@ enum class Axis : uint8_t
     Tilt,
 };
 
-// What a protocol may do with the head's calibration (docs/DESIGN.md §5.6).
+/// What a protocol may do with the head's calibration (docs/DESIGN.md §5.6).
 class ICalibration
 {
 public:
     enum class Result : uint8_t
     {
         Ok,
-        Range,    // values fail validation
-        Enabled,  // drive changes (or reset) need the head disabled
-        Storage,  // persisting failed
+        Range,    ///< values fail validation
+        Enabled,  ///< drive changes (or reset) need the head disabled
+        Storage,  ///< persisting failed
     };
 
     enum class Source : uint8_t
     {
-        Factory,   // built-in (build-time) values
-        Saved,     // loaded from or just written to persistent storage
-        Modified,  // changed since the last load/save
+        Factory,   ///< built-in (build-time) values
+        Saved,     ///< loaded from or just written to persistent storage
+        Modified,  ///< changed since the last load/save
     };
 
     virtual ~ICalibration() = default;
@@ -37,7 +37,7 @@ public:
     [[nodiscard]] virtual ::owlet::hal::AxisCalibration get(Axis axis) const = 0;
     [[nodiscard]] virtual Result set(Axis axis, const ::owlet::hal::AxisCalibration& cal) = 0;
     [[nodiscard]] virtual Result save() = 0;
-    // Restore factory values and erase the saved copy.
+    /// Restore factory values and erase the saved copy.
     [[nodiscard]] virtual Result reset() = 0;
     [[nodiscard]] virtual Source source() const = 0;
 };

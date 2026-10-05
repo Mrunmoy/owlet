@@ -9,19 +9,19 @@
 namespace owlet::core
 {
 
-// Fixed, versioned, CRC-protected byte layout for CalibrationRecord, so the
-// persisted format is host-tested and platform stores only move bytes.
+/// Fixed, versioned, CRC-protected byte layout for CalibrationRecord, so the
+/// persisted format is host-tested and platform stores only move bytes.
 //
-//   0  u32 magic 'OWLC'   4  u16 version   6  u16 reserved (0)
-//   8  pan  : u16 drive_min, u16 drive_center, u16 drive_max, u16 pad, f32 min_deg, f32 max_deg
-//             (the drive numbers are pulse widths in µs on a servo head)
-//   24 tilt : same
-//   40 u32 CRC-32 (IEEE) of bytes 0..39
-// All little-endian.
+///   0  u32 magic 'OWLC'   4  u16 version   6  u16 reserved (0)
+///   8  pan  : u16 drive_min, u16 drive_center, u16 drive_max, u16 pad, f32 min_deg, f32 max_deg
+///             (the drive numbers are pulse widths in µs on a servo head)
+///   24 tilt : same
+///   40 u32 CRC-32 (IEEE) of bytes 0..39
+/// All little-endian.
 class CalibrationCodec
 {
 public:
-    static constexpr uint32_t    kMagic       = 0x434C574Fu;  // "OWLC" little-endian
+    static constexpr uint32_t    kMagic       = 0x434C574Fu;  ///< "OWLC" little-endian
     static constexpr uint16_t    kVersion     = 1;
     static constexpr std::size_t kEncodedSize = 44;
 

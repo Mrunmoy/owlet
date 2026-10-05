@@ -294,3 +294,90 @@ class EndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(SIM.exists(), f"owlet_sim not built ({SIM})")
+class EventsEndToEndTest(unittest.TestCase):
+    """Events raised inside the real firmware core reach Python handlers."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.link = os.path.join(self.tmp.name, "owlet")
+        self.sim = subprocess.Popen([str(SIM), "--link", self.link, "--inject"],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(self._kill)
+        self.assertEqual(self.sim.stdout.readline().strip(), self.link)
+        self.head = Owlet(self.link, timeout=1.0)
+        self.addCleanup(self.head.close)
+
+    def _kill(self):
+        if self.sim.poll() is None:
+            self.sim.terminate()
+            self.sim.wait(timeout=5)
+        for stream in (self.sim.stdin, self.sim.stdout):
+            if not stream.closed:
+                stream.close()
+
+    def raise_in_firmware(self, line):
+        self.sim.stdin.write(line + "\n")
+        self.sim.stdin.flush()
+
+    def wait_for(self, predicate, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not predicate():
+            time.sleep(0.01)
+        return predicate()
+
+    def test_handlers_hear_what_the_firmware_raises(self):
+        heard = []
+        self.head.limit_hit.connect(lambda axis, end: heard.append(("limit", axis, end)))
+        self.head.fault_changed.connect(lambda axis, faults: heard.append(("fault", axis, faults)))
+        self.head.driver_offline.connect(lambda axis: heard.append(("offline", axis)))
+        self.raise_in_firmware("limit pan max")
+        self.raise_in_firmware("fault tilt 6")
+        self.raise_in_firmware("offline tilt")
+        self.assertTrue(self.wait_for(lambda: len(heard) == 3), heard)
+        self.assertEqual(sorted(heard), [("fault", "tilt", 6), ("limit", "pan", "max"), ("offline", "tilt")])
+
+    def test_trouble_is_recorded_and_can_be_cleared(self):
+        self.raise_in_firmware("fault tilt 4")
+        self.assertTrue(self.wait_for(lambda: len(self.head.trouble_codes()) == 1))
+        # Apart in time: two changes raised in the same pass are merged into one report.
+        self.raise_in_firmware("fault tilt 4")
+        self.raise_in_firmware("limit pan min")
+        self.assertTrue(self.wait_for(lambda: len(self.head.trouble_codes()) == 2))
+        by_code = {t.code: t for t in self.head.trouble_codes()}
+        self.assertEqual(by_code[21].axis, "tilt")
+        self.assertEqual(by_code[21].count, 2)
+        self.assertEqual(by_code[21].detail_text, "short on coil A")
+        self.assertEqual(by_code[30].detail_text, "min end")
+        self.head.clear_trouble_codes()
+        self.assertEqual(self.head.trouble_codes(), [])
+
+    def test_events_can_be_silenced(self):
+        heard = []
+        self.head.stalled.connect(heard.append)
+        self.head.events(False)
+        self.raise_in_firmware("stall pan")
+        time.sleep(0.3)
+        self.assertEqual(heard, [])
+        self.assertEqual([t.code for t in self.head.trouble_codes()], [32], "still recorded as trouble")
+        self.head.events(True)
+        self.raise_in_firmware("stall pan")
+        self.assertTrue(self.wait_for(lambda: heard == ["pan"]), heard)
+
+    def test_the_real_head_reports_its_own_watchdog(self):
+        fired = []
+        self.head.watchdog_expired.connect(lambda: fired.append(True))
+        self.head.enable()
+        self.head.watchdog(100)
+        self.head.velocity(10, 0)
+        self.assertTrue(self.wait_for(lambda: bool(fired)))
+        self.assertEqual([t.name for t in self.head.trouble_codes()], ["WATCHDOG"])
+        self.assertEqual(self.head.stats()["dropped"], 0)
+
+    def test_a_servo_head_cannot_seek(self):
+        with self.assertRaises(OwletError) as cm:
+            self.head.seek_home()
+        self.assertEqual(cm.exception.code, "UNS")

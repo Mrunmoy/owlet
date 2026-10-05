@@ -64,6 +64,7 @@ public:
     /// @param calibration The same axis's calibration, for the soft limits.
     /// @param minSwitch   Switch at the low end of travel.
     /// @param maxSwitch   Switch at the high end, or nullptr if there is none.
+    /// @param config      Speeds and distances for the search.
     AxisHoming(::owlet::hal::IAxis& axis,
                ::owlet::hal::IAxisCalibration& calibration,
                const ::owlet::hal::IDigitalInput& minSwitch,

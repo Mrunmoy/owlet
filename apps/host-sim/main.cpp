@@ -7,6 +7,10 @@
 // With --link PATH the pty is also symlinked to PATH for a stable name.
 // With --cal-file PATH the calibration is persisted to PATH (as NVS would be
 // on the device); without it, $CAL,SAVE keeps it in memory only.
+// With --inject, lines typed on standard input raise events the simulated
+// servo head has no hardware to produce, so clients can be tested against
+// them:  limit pan max | lost pan | stall tilt | fault pan 6 | online pan |
+//        offline tilt | homed | homefail tilt 1
 
 #include "owlet/core/CalibrationCodec.hpp"
 #include "owlet/core/Calibrator.hpp"
@@ -34,6 +38,8 @@
 #include <iterator>
 #include <vector>
 #include <fcntl.h>
+#include <poll.h>
+#include <sstream>
 #include <string>
 #include <termios.h>
 #include <thread>
@@ -169,14 +175,84 @@ private:
     std::vector<uint8_t> m_memory;
 };
 
+// Turns one typed line into an event. Unknown lines are ignored.
+void inject(const std::string& line, ::owlet::core::IEventSink& events)
+{
+    using ::owlet::core::Event;
+    using ::owlet::core::EventId;
+    std::istringstream in(line);
+    std::string        what;
+    std::string        where;
+    std::string        extra;
+    in >> what >> where >> extra;
+    const uint8_t axis = (where == "pan") ? uint8_t{0} : ((where == "tilt") ? uint8_t{1} : Event::kHead);
+    uint16_t      arg  = 0;
+    if (extra == "max")
+    {
+        arg = 1;
+    }
+    else if (!extra.empty() && extra != "min")
+    {
+        arg = static_cast<uint16_t>(std::strtoul(extra.c_str(), nullptr, 10));
+    }
+    struct Named
+    {
+        const char* name;
+        EventId     id;
+    };
+    static const Named kNames[] = {
+        {"limit", EventId::LimitHit},       {"lost", EventId::PositionLost},
+        {"stall", EventId::Stalled},        {"fault", EventId::DriverFaultChanged},
+        {"online", EventId::DriverOnline},  {"offline", EventId::DriverOffline},
+        {"homed", EventId::Homed},          {"homefail", EventId::HomingFailed},
+    };
+    for (const Named& n : kNames)
+    {
+        if (what == n.name)
+        {
+            (void) events.post(n.id, axis, arg);
+        }
+    }
+}
+
+// Reads whatever complete lines are waiting on standard input, without
+// blocking. Returns false once input has ended.
+bool pumpInjections(std::string& pending, ::owlet::core::IEventSink& events)
+{
+    pollfd fd{STDIN_FILENO, POLLIN, 0};
+    while (::poll(&fd, 1, 0) > 0)
+    {
+        char          buf[128];
+        const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
+        if (n <= 0)
+        {
+            return false;
+        }
+        pending.append(buf, static_cast<std::size_t>(n));
+        std::size_t eol = 0;
+        while ((eol = pending.find('\n')) != std::string::npos)
+        {
+            inject(pending.substr(0, eol), events);
+            pending.erase(0, eol + 1);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     std::string link;
     std::string calFile;
+    bool        injecting = false;
     for (int i = 1; i < argc; ++i)
     {
+        if (std::strcmp(argv[i], "--inject") == 0)
+        {
+            injecting = true;
+            continue;
+        }
         if (std::strcmp(argv[i], "--link") == 0 && i + 1 < argc)
         {
             link = argv[++i];
@@ -240,8 +316,13 @@ int main(int argc, char** argv)
     (void) events.attach(protocol);
     ::owlet::core::ControlLoop  loop(port, head, protocol, &events);
     loop.begin(clock.nowMs());
+    std::string typed;
     while (g_stop == 0)
     {
+        if (injecting)
+        {
+            injecting = pumpInjections(typed, events);
+        }
         loop.service(clock.nowMs());
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

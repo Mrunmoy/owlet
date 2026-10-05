@@ -1,5 +1,7 @@
 # Calibration
 
+> **The servo head is untested on the current firmware.** It was last run on real hardware with firmware 0.3.0. Everything added since builds for the ESP32-S3 and passes the PC tests and the simulator, but it has not been flashed to a servo head again. Treat this path as unverified until someone re-runs it: `./build.py --esp --flash`, then `owlet selftest`.
+
 The first part of this file is about the servo head. The stepper head is at the [end](#stepper-head-raspberry-pi-pico).
 
 *Calibration is stored on the device (NVS) since owlet 0.3.0 and set from the PC with `owlet cal`. Kconfig only provides the factory defaults.*
@@ -58,9 +60,9 @@ A stepper axis has nothing to measure in the way a servo's pulses are measured. 
 
 | What | Where it lives | Reference head |
 |------|----------------|----------------|
-| Steps per degree | Build constants in `apps/pico-owlet/main.cpp` (full steps, microsteps, belt ratio) | 200 × 16 × 3 / 360 = 26.67 |
+| Steps per degree | Build constants in `apps/pico-owlet/board.hpp` (full steps, microsteps, belt ratio) | 200 × 16 × 3 / 360 = 26.67 |
 | Direction | `kPanReversed` / `kTiltReversed` in the same file | both `true`: pan + is the camera's right, tilt + is up (confirmed by eye) |
-| Soft limits | Factory values in `main.cpp`; change on the device with `owlet cal <axis> --limits MIN MAX` and `owlet cal save` | pan ±90, tilt ±60 |
+| Soft limits | Factory values in `board.hpp`; change on the device with `owlet cal <axis> --limits MIN MAX` and `owlet cal save` | pan ±90, tilt ±60 |
 
 On the wire the stepper head reports its three "pulse" numbers as `0/0/0`; only the limits are adjustable, up to the travel compiled in (pan ±170, tilt ±90).
 
@@ -73,7 +75,7 @@ The head has no position sensor. **Whatever pose it is in when it powers up (or 
 1. Centre by hand, power on, `owlet enable`, `owlet speed 10`.
 2. Widen the limit you are exploring: `owlet cal pan --limits -170 170` (not saved).
 3. `owlet nudge` towards an end in small steps. The end is where a cable goes tight or something would touch, minus a margin.
-4. Set and keep the result: `owlet cal pan --limits MIN MAX`, `owlet cal save`. To make it the factory value too, edit `kPanAxis` / `kTiltAxis` in `main.cpp`.
+4. Set and keep the result: `owlet cal pan --limits MIN MAX`, `owlet cal save`. To make it the factory value too, edit `kPanAxis` / `kTiltAxis` in `board.hpp`.
 
 ### Measured, 2026-10-05
 

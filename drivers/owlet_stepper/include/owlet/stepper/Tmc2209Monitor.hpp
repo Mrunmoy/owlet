@@ -10,17 +10,17 @@
 namespace owlet
 {
 
-// Looks after one TMC2209 from inside the control loop without getting in
-// its way: one short exchange every kPollPeriodMs, never more.
+/// Looks after one TMC2209 from inside the control loop without getting in
+/// its way: one short exchange every kPollPeriodMs, never more.
 //
-//  - Until the chip answers (its motor supply may be off) it is probed once
-//    a second; the head keeps running in standalone step/dir mode meanwhile.
-//  - When it answers it is configured, and from then on its status, load
-//    and reset flag are read in turn.
-//  - A chip that restarted (its supply dipped) is configured again; one
-//    that stops answering goes back to being probed.
-//  - A listener, if given, is told when the chip comes or goes, and when
-//    its faults or stall indication change.
+///  - Until the chip answers (its motor supply may be off) it is probed once
+///    a second; the head keeps running in standalone step/dir mode meanwhile.
+///  - When it answers it is configured, and from then on its status, load
+///    and reset flag are read in turn.
+///  - A chip that restarted (its supply dipped) is configured again; one
+///    that stops answering goes back to being probed.
+///  - A listener, if given, is told when the chip comes or goes, and when
+///    its faults or stall indication change.
 class Tmc2209Monitor final : public ::owlet::hal::IPollable, public ::owlet::hal::IAxisDiagnostics
 {
 public:
@@ -28,8 +28,8 @@ public:
     static constexpr uint32_t kProbePeriodMs = 1000;
     static constexpr uint8_t kMaxFailures = 3;
 
-    // `phaseMs` delays this monitor's schedule, so two drivers don't both
-    // take their slice in the same loop pass.
+    /// `phaseMs` delays this monitor's schedule, so two drivers don't both
+    /// take their slice in the same loop pass.
     explicit Tmc2209Monitor(Tmc2209& driver,
                             uint32_t phaseMs = 0,
                             ::owlet::hal::IAxisDiagnosticsListener* listener = nullptr);
@@ -60,14 +60,14 @@ private:
 
     Tmc2209& m_driver;
     ::owlet::hal::IAxisDiagnosticsListener* m_listener;
-    ::owlet::hal::AxisDiagnostics m_told{}; // what the listener last heard
+    ::owlet::hal::AxisDiagnostics m_told{}; ///< what the listener last heard
     Tmc2209::Status m_status{};
     uint32_t m_elapsedMs;
     uint16_t m_load{0};
     Step m_step{Step::Status};
     uint8_t m_failures{0};
     bool m_online{false};
-    bool m_loadKnown{false}; // a load figure has been read since coming online
+    bool m_loadKnown{false}; ///< a load figure has been read since coming online
 };
 
 } // namespace owlet

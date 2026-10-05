@@ -51,12 +51,14 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 
 ## Features
 
-- **Plug in and go.** The ESP32-S3's built-in USB shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
+- **Plug in and go.** The board's own USB port shows up as a standard serial port (`/dev/ttyACM*`, `COMx`, `/dev/cu.usbmodem*`). No drivers, no USB-TTL adapter.
 - **Human-readable, checksummed protocol.** One line per message, like `$MOVE,30,-15*3B`. You can type them in a terminal or generate them from any language, and every frame is integrity-checked.
 - **Know where it is, and when.** Poll the position with `$POS` or stream it at up to 50 Hz. Every report is timestamped with the device clock, and the client maps those timestamps onto your PC's clock, so you can ask "where was the camera pointing when this frame was taken?"
+- **It tells you; you don't have to ask.** The head reports what it notices as it happens: a move arriving, the watchdog firing, a motor driver raising a fault. In Python you connect a function to each (`head.arrived.connect(...)`) and it is called when the time comes. Inside the firmware the same idea holds: whatever notices a change announces it once, and nothing polls.
+- **It can say what went wrong.** `owlet dtc` lists every kind of trouble since power-up, with how often, when, and what to check.
 - **Self-describing.** The head reports its capabilities (`$CAPS`), its calibration (`$CAL`) and, on the stepper head, what its motor drivers say about themselves (`$DIAG`: current, load, faults), so clients adapt instead of probing. Calibrate once from the PC; it's stored on the device and survives power cycles and reflashing.
 - **Made for tracking.** Velocity mode (`$VEL`) turns at the rates your controller asks for, and a **watchdog** stops the head if your program stops talking to it. A ready-made `Tracker` and pixel-to-rate controller plug straight into a YOLO/OpenCV loop.
-- **Smooth, speed-limited motion.** Constant-velocity slew from 1 to 500 °/s, timed from the actual elapsed time so it doesn't speed up or slow down with loop timing.
+- **Smooth, speed-limited motion.** Motion is timed from the actual elapsed time, so it doesn't speed up or slow down with loop timing. Servos slew at a constant 1 to 500 °/s; steppers ramp up and down at a set acceleration and count every step.
 - **Safe by default.** The motors are limp at power-up and nothing moves until you explicitly enable it.
 - **Swap the motors, the board or the link.** The core talks to three small interfaces: an axis (`IAxis`), a platform (clock, serial port, storage) and a byte stream. Two heads ship from the same core: an ESP32-S3 with hobby servos, and a Raspberry Pi Pico with belt-driven steppers. Adding another is one driver class or one platform folder, not a rewrite.
 - **Pluggable protocols (SOLID).** The firmware core knows nothing about any wire format. Protocols are `IProtocol` plug-ins injected at start-up, several can share the USB port, and you can add your own (Pelco-D, G-code, binary, …) without touching owlet's code.
@@ -64,7 +66,7 @@ pan   30.0  tilt  -15.0   target   30.0  -15.0   holding
 - **Batteries-included PC side.** A `pip`-installable Python library and an `owlet` command with port auto-detection, a live position view, and an interactive shell.
 - **Hardware-free development.** A host simulator runs the *real* firmware logic behind a virtual serial port.
 - **Efficient.** No heap, no exceptions, fixed buffers, integer formatting, and input handed to protocols a chunk at a time. The whole firmware is about 230 KB.
-- **Tested.** 390 automated tests: 288 C++ unit and integration tests, plus 102 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
+- **Tested.** 490 automated tests: 368 C++ unit and integration tests, plus 122 Python tests, including end-to-end runs against the simulator that check latency and clock accuracy against known values, and an opt-in suite that runs on a real head. Every finding from an adversarial review has a regression test.
 
 ## How it works
 
@@ -82,7 +84,7 @@ flowchart LR
     PCA -->|"PWM channel 1"| TILT
 ```
 
-The firmware runs a fixed-rate loop (100 Hz on the servo head, 500 Hz on the stepper head). Each pass it advances both axes (position move or velocity mode, plus the watchdog), lets the protocol emit time-driven messages (arrival, streamed position, timeouts), then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The board-specific code only connects it to the real USB port, clock and motor outputs.
+The firmware runs a fixed-rate loop (100 Hz on the servo head, 500 Hz on the stepper head). Each pass it advances both axes (position move or velocity mode, plus the watchdog), delivers whatever that step announced (an arrival, a timeout, a fault) to the parts that react to it, sends the streamed position if one is due, then reads and answers any complete command lines from USB. All of that logic is platform-independent C++ that is unit-tested on a normal PC. The board-specific code only connects it to the real USB port, clock and motor outputs.
 
 The picture above is the servo head. The stepper head swaps the right-hand side for a Raspberry Pi Pico driving two TMC2209 modules; the PC side, the protocol and the core are identical. See [Hardware](#hardware).
 
@@ -141,6 +143,8 @@ python tools/python/examples/track_object.py --target person --fov-h 70 --fov-v 
 
 There are two reference heads. Both speak the same protocol and run the same core, so the client and everything built on it work with either.
 
+> **The servo head is untested on the current firmware.** It was last run on real hardware with firmware 0.3.0. Everything added since (the motor-neutral axis layer, events, trouble codes, limit switches) builds for the ESP32-S3 and passes the PC tests and the simulator, which use the servo code, but it has not been flashed to a servo head again. Treat this path as unverified until someone re-runs it: `./build.py --esp --flash`, then `owlet selftest`. The stepper head is the one in active use.
+
 | | Servo head | Stepper head |
 |---|---|---|
 | Board | ESP32-S3 Zero | Raspberry Pi Pico (RP2040) |
@@ -148,9 +152,11 @@ There are two reference heads. Both speak the same protocol and run the same cor
 | Position | absolute, ±90° | relative: where it is at `enable` is taken as the pose you give |
 | Smallest step | about 0.44° | 0.0375° |
 | Top speed | 500 °/s | 240 °/s (ran clean at 360) |
-| Status | verified on hardware (firmware 0.3.0) | verified on hardware (firmware 0.4.0): pan ±90°, tilt ±60°, up to 240 °/s |
+| Status | last verified on hardware with firmware 0.3.0; **untested on 0.5.0** | verified on hardware (firmware 0.4.0, and 0.5.0 with the motors disconnected): pan ±90°, tilt ±60°, up to 240 °/s |
 
 ### Servo head: bill of materials
+
+*Untested on the current firmware; see the note above.*
 
 | Qty | Part | Notes |
 |----:|------|-------|
@@ -202,7 +208,8 @@ flowchart LR
 | Qty | Part | Notes |
 |----:|------|-------|
 | 1 | Raspberry Pi Pico or pin-compatible RP2040 board | Powered from USB, which also carries the protocol |
-| 2 | TMC2209 StepStick modules | Step/dir mode; current set with the on-board potentiometer |
+| 2 | TMC2209 StepStick modules | Step/dir for motion; the firmware sets the motor current over each driver's UART pin |
+| 4 | Limit switches (lever microswitches) | Optional, two per axis. Supported in the firmware; not yet fitted to the reference head |
 | 2 | NEMA 17 pancake steppers (1.8°, about 23 mm long) | |
 | 2 | GT2 20T pulley (5 mm bore), 60T pulley, 200 mm closed belt | 3:1 reduction per axis |
 | 4 | 625ZZ bearings · 5 mm shafts, 80 mm and 120 mm | |
@@ -227,7 +234,7 @@ flowchart LR
 | `3V3(OUT)` | `VIO` on both drivers | |
 | `GND` | Driver grounds and supply negative | |
 
-12 V goes to `VM` on the drivers only, never to the Pico. Pin tables, the driver pinout and a staged bring-up order are in [`docs/wiring/pico-tmc2209/`](docs/wiring/pico-tmc2209/README.md).
+`GP10`/`GP11` (pan) and `GP14`/`GP15` (tilt) are set aside for the limit switches. 12 V goes to `VM` on the drivers only, never to the Pico. Pin tables, the driver pinout and a staged bring-up order are in [`docs/wiring/pico-tmc2209/`](docs/wiring/pico-tmc2209/README.md).
 
 ## Quick start
 
@@ -272,13 +279,13 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 |---------|--------------|
 | `owlet ports` | List connected boards that look like an owlet |
 | `owlet ping` | Check the link; print firmware and protocol versions |
-| `owlet enable [PAN TILT]` | Energise the servos, optionally at a given pose |
-| `owlet disable` | Turn the servos off (limp) |
+| `owlet enable [PAN TILT]` | Energise the motors, optionally at a given pose |
+| `owlet disable` | Turn the motors off (limp) |
 | `owlet move PAN TILT [-w]` | Absolute move in degrees; `-w` waits for arrival |
 | `owlet nudge DPAN DTILT [-w]` | Relative move, clamped to the limits |
 | `owlet home [-w]` | Move to 0, 0 |
 | `owlet stop` | Stop where it is right now |
-| `owlet speed [DEG_PER_S]` | Get or set the slew speed (1–500 °/s, default 90) |
+| `owlet speed [DEG_PER_S]` | Get or set the slew speed (default 90 °/s; the range is the head's, see `owlet caps`) |
 | `owlet pos` | Print the current and target position |
 | `owlet limits` | Print the soft limits per axis |
 | `owlet vel PAN TILT` | Velocity mode in °/s (stops after the watchdog period unless repeated) |
@@ -286,6 +293,9 @@ owlet [-p PORT] [-t TIMEOUT] <command> [args]
 | `owlet clock` | Device clock in ms |
 | `owlet caps` | What the head can do: speed, velocity, watchdog and stream ranges |
 | `owlet diag` | What the motor drivers report: current, load, faults (stepper head) |
+| `owlet dtc [--clear]` | What has gone wrong since power-up, how often, and what to check |
+| `owlet stat` | Health counters: events raised and lost, late control-loop passes |
+| `owlet seek` | Find the reference position from the limit switches (a head that has them) |
 | `owlet selftest [-y]` | Exercise both motors inside the head's own limits and print a pass/fail report. Asks before moving; `-y` skips the questions |
 | `owlet cal [pan\|tilt]` | Show the calibration stored on the device |
 | `owlet cal pan --limits -85 90` | Change soft limits (works while enabled) |
@@ -425,13 +435,13 @@ sequenceDiagram
     H-->>PC: $TIMEOUT,VEL*28
 ```
 
-Serial settings don't matter on native USB (any baud rate works). Open the port normally and **don't toggle DTR/RTS**, because that's the chip's auto-reset signal.
+Serial settings don't matter on native USB (any baud rate works). Open the port normally and **don't toggle DTR/RTS**: on the ESP32 that is the chip's auto-reset signal.
 
 [`docs/protocol_vectors.txt`](docs/protocol_vectors.txt) lists valid and invalid frames you can use to test your own implementation.
 
 ### No hardware? Use the simulator
 
-`owlet_sim` runs the real firmware logic (protocol, motion and a simulated PCA9685) behind a Linux pseudo-terminal:
+`owlet_sim` runs the real firmware logic (protocol, motion, events and a simulated servo head) behind a Linux pseudo-terminal:
 
 ```bash
 nix develop
@@ -443,6 +453,8 @@ owlet -p /tmp/owlet move 20 20 --wait
 owlet -p /tmp/owlet watch
 ```
 
+Started with `--inject`, the simulator also raises events its servo head has no hardware to produce, from lines typed on its standard input (`limit pan max`, `fault tilt 6`, `offline pan`, `stall tilt`, …). That is how a program's handlers can be tried without a head.
+
 ## Protocol reference
 
 ### Requests
@@ -452,20 +464,20 @@ owlet -p /tmp/owlet watch
 | `$PING` | `$PONG,<proto>,<fw>` | e.g. `$PONG,3,0.5.0` |
 | `$ENABLE` | `$ACK,ENABLE` | Energise at the last known position (0, 0 after boot) |
 | `$ENABLE,<pan>,<tilt>` | `$ACK,ENABLE` | Energise at a pose; if already enabled, moves there smoothly instead |
-| `$DISABLE` | `$ACK,DISABLE` | Servos limp |
+| `$DISABLE` | `$ACK,DISABLE` | Motors limp |
 | `$MOVE,<pan>,<tilt>` | `$ACK,MOVE` | Absolute move; outside the limits → `NAK RNG` |
 | `$NUDGE,<dpan>,<dtilt>` | `$ACK,NUDGE` | Relative to the current target; clamped to the limits |
 | `$HOME` | `$ACK,HOME` | Same as `MOVE,0,0` |
 | `$STOP` | `$ACK,STOP` | Stop at the current position |
 | `$SPEED` | `$SPEED,<°/s>` | Query the slew speed |
-| `$SPEED,<°/s>` | `$ACK,SPEED` | 1–500, applies to both axes |
+| `$SPEED,<°/s>` | `$ACK,SPEED` | Applies to both axes. The allowed range is the head's own: read it with `$CAPS` |
 | `$POS` | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<state>,<ms>` | `state`: `D` disabled, `M` moving, `H` holding; `ms`: device time of the pose |
 | `$STREAM,<hz>` | `$ACK,STREAM` | 0 = off, 1–50 Hz periodic `$POS` |
 | `$LIMITS` | `$LIMITS,<pmin>,<pmax>,<tmin>,<tmax>` | Soft limits in degrees |
-| `$VEL,<pan°/s>,<tilt°/s>` | `$ACK,VEL` | Velocity mode, each −500…500; stops at soft limits; ended by any position command |
+| `$VEL,<pan°/s>,<tilt°/s>` | `$ACK,VEL` | Velocity mode, each up to the head's limit either way (`$CAPS`); stops at soft limits; ended by any position command |
 | `$WATCHDOG` / `$WATCHDOG,<ms>` | `$WATCHDOG,<ms>` / `$ACK,WATCHDOG` | Velocity watchdog: 0 = off, 50–5000 ms, default 500 |
 | `$CLOCK` | `$CLOCK,<ms>` | Device uptime in ms (wraps after ~49.7 days) |
-| `$CAPS` | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Capabilities, e.g. `$CAPS,1.0,500.0,500.0,50,5000,50` |
+| `$CAPS` | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Capabilities, e.g. `$CAPS,1.0,240.0,240.0,50,5000,50` on the stepper head |
 | `$DIAG,<AXIS>` | `$DIAG,<AXIS>,<U\|N>,<faults>,<stalled>,<load>,<mA>` | What the motor driver reports. `N` = no driver data (servo head, or the motor supply is off). Faults are a bit mask; see [`docs/DESIGN.md` §5.7](docs/DESIGN.md) |
 | `$EVENTS,<0\|1>` | `$ACK,EVENTS` | Turn the `$EVT` lines off or on. On at power-up |
 | `$SEEK` | `$ACK,SEEK` | Find the reference position from the limit switches. The head moves by itself; the outcome is `$EVT,HOMED` or `$EVT,HOMEFAIL`. `NAK,SEEK,UNS` on a head without switches |
@@ -540,8 +552,8 @@ A code's number never changes meaning. Codes 30 to 40 are recorded once limit sw
 | `$NAK,<CMD>,LOST` | The head does not know where it is (it ran into a limit switch, or homing failed). `SEEK`, or `DISABLE` then `ENABLE,<pan>,<tilt>` at a known pose |
 | `$NAK,<CMD>,BSY` | Homing is under way. `STOP` aborts it |
 | `$NAK,<CMD>,UNS` | This head cannot do that |
-| `$NAK,<CMD>,DIS` | Servos are disabled; send `ENABLE` first |
-| `$NAK,<CMD>,BUS` | PCA9685 didn't respond (check wiring and power) |
+| `$NAK,<CMD>,DIS` | The motors are disabled; send `ENABLE` first |
+| `$NAK,<CMD>,BUS` | The motor hardware didn't respond (check wiring and power) |
 | `$NAK,CAL,ENA` | Pulse calibration can only change while the servos are disabled |
 | `$NAK,CAL,STO` | Saving to (or erasing from) flash failed |
 | `$ERR,CHK` | Checksum mismatch |
@@ -549,9 +561,9 @@ A code's number never changes meaning. Codes 30 to 40 are recorded once limit sw
 | `$ERR,LEN` | Line longer than 82 bytes |
 | `$ERR,UNK` | Unknown command |
 
-Every valid request gets exactly one reply, in order. The full specification, including edge cases and the reasoning behind them, is in [`docs/DESIGN.md` §5](docs/DESIGN.md#5-wire-protocol-v1).
+Every valid request gets exactly one reply, in order. The full specification, including edge cases and the reasoning behind them, is in [`docs/DESIGN.md` §5](docs/DESIGN.md#5-native-wire-protocol-v3).
 
-> **About "position":** hobby servos don't report where they actually are. owlet reports the position it has *commanded*, rate-limited the same way the servo moves. At normal speeds the real servo follows it closely. If a servo is blocked or overloaded, the two will differ.
+> **About "position":** neither head measures where the shaft really is. A hobby servo doesn't report it, so owlet reports the position it has *commanded*, rate-limited the same way the servo moves. A stepper is counted step by step, which is exact as long as no step is lost. If a motor is blocked or overloaded, the reported and the real position will differ; limit switches are what let the stepper head find out and recover.
 
 ## Extending owlet
 
@@ -559,7 +571,7 @@ The firmware is organised around small interfaces, so you can extend it by **add
 
 ```mermaid
 flowchart TB
-    LOOP["ControlLoop<br/>100 Hz scheduler"]
+    LOOP["ControlLoop<br/>fixed-rate scheduler"]
     SRC[/"IByteSource · USB, UART, TCP…"/] --> LOOP
     LOOP --> PROTO{{"IProtocol"}}
     PROTO --- TEXT["TextProtocol<br/>built in"]
@@ -582,6 +594,7 @@ flowchart TB
 | `owlet::hal::IAxis` (+ `IAxisCalibration`) | add a **motor type**. `Servo` and `StepperAxis` are the two built in; a DC motor with an encoder would be a third. The motion policy, calibration, every protocol and the client work with it unchanged |
 | `owlet::hal::IServoChannel` | output servo pulses from something other than a PCA9685 (e.g. ESP32 LEDC) |
 | `owlet::hal::IStepGenerator` | emit step/dir pulses on another chip (the Pico uses a PIO state machine per motor) |
+| `owlet::core::EventDelegate` | react to what the head notices without anything polling for it. Derive from it and override only the reactions you want: `onArrived()`, `onLimitHit(axis, end)`, `onDriverFaultChanged(axis, faults)`, … The trouble log and the wire protocol are both delegates; a status display or a logger would be another |
 | `owlet::hal::IClock` · `ISerialPort` · `IDigitalOutput` · `core::ICalibrationStore` | port to **another board**: implement these few in a `platform/owlet_<board>/` folder and add a wiring-only `main.cpp`. `platform/owlet_pico/` is about 400 lines |
 | `owlet::hal::IByteSource` / `IByteSink` | carry the protocol over **another transport** (UART, TCP, BLE, Wi-Fi). The loop and the protocols only ever see these two |
 | `owlet::core::IPanTilt` | replace the whole two-axis policy (a different kinematic arrangement) under every existing protocol |
@@ -602,13 +615,25 @@ public:
 Then, in the app's `main.cpp` (`apps/esp32-owlet/main/` or `apps/pico-owlet/`), run it next to the built-in protocol on the same USB port:
 
 ```cpp
-static owlet::text::TextProtocol    native(usb, head, clock, owlet::core::kFirmwareVersion);
+static owlet::text::TextProtocol    native(usb, head, calibrator, clock, owlet::core::kFirmwareVersion);
 static MyProtocol                   mine(usb, head);
 static owlet::core::ProtocolMux<2>  protocols({&native, &mine});
 static owlet::core::ControlLoop     loop(usb, head, protocols, &events);
 ```
 
-A protocol that wants to be told when a move arrives, the watchdog fires or a motor stops answering also implements `owlet::core::IEventObserver` and is attached to the event bus: `events.attach(mine);`.
+A protocol that wants to be told when a move arrives, the watchdog fires or a motor stops answering also derives from `owlet::core::EventDelegate`, overrides the reactions it wants, and is attached to the event bus:
+
+```cpp
+class MyProtocol final : public owlet::core::IProtocol, public owlet::core::EventDelegate {
+    void onArrived() override;                                   // tell my client the move finished
+    void onLimitHit(uint8_t axis, owlet::core::LimitEnd end) override;
+    …
+};
+
+events.attach(mine);
+```
+
+The names follow one rule throughout the firmware, so a class's header says what it does: **`handleXxx`** carries out a command that was asked for, **`notifyXxx`** announces something that happened, and **`onXxx`** reacts to an announcement.
 
 The multiplexer offers the first byte of each frame to each protocol in order. Native frames start with `$`, so anything else is free for your protocol. The contract and an example test setup are in [`docs/DESIGN.md` §4.3–4.4](docs/DESIGN.md#43-the-iprotocol-contract).
 
@@ -619,7 +644,7 @@ git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
 ```
 
 - **Python (PC side):** `pip install -e third_party/owlet/tools/python`, then `from owlet import Owlet, Tracker, PixelController`.
-- **Host C++ (tests, simulators):** `add_subdirectory(third_party/owlet)` and link `owlet::core`, `owlet::text`, `owlet::servo`, `owlet::pca9685` or `owlet::hal`. owlet's own tests and tools are built only when it's the top-level project.
+- **Host C++ (tests, simulators):** `add_subdirectory(third_party/owlet)` and link `owlet::core`, `owlet::text`, `owlet::servo`, `owlet::stepper`, `owlet::pca9685` or `owlet::hal`. owlet's own tests and tools are built only when it's the top-level project.
 - **ESP-IDF firmware:** in your project's `CMakeLists.txt`:
 
   ```cmake
@@ -629,7 +654,9 @@ git submodule add https://github.com/Mrunmoy/owlet.git third_party/owlet
 
   then `REQUIRES owlet_core owlet_text owlet_pca9685 owlet_esp32` in your `main` component, and wire things up as `apps/esp32-owlet/main/main.cpp` does.
 
-  **Copy the console settings too.** The USB port must carry only protocol traffic, so add these to your project's `sdkconfig.defaults` (see `apps/esp32-owlet/sdkconfig.defaults`). Without them, ESP-IDF log lines are mixed into protocol frames.
+  For a pico-sdk project, `add_subdirectory` owlet and `platform/owlet_pico` and link `owlet::pico`, as `apps/pico-owlet/CMakeLists.txt` does.
+
+  **Copy the console settings too (ESP-IDF).** The USB port must carry only protocol traffic, so add these to your project's `sdkconfig.defaults` (see `apps/esp32-owlet/sdkconfig.defaults`). Without them, ESP-IDF log lines are mixed into protocol frames.
 
   ```
   CONFIG_ESP_CONSOLE_UART_DEFAULT=y
@@ -663,6 +690,8 @@ tilt  pulses 2500/1500/500 us   limits -90.0..90.0 deg   reversed   (saved)
 - **0° isn't quite centred?** Adjust the centre pulse (`--pulses`). The mapping bends at the centre, so the endpoints don't move.
 - `owlet cal reset` goes back to the factory values. Those come from Kconfig (`idf.py menuconfig` → **owlet configuration**), along with the I²C pins and PCA9685 channels.
 
+**On the stepper head** only the soft limits are stored this way (`owlet cal pan --limits …`). There are no pulse widths, and direction, steps per degree, speed and acceleration are properties of the build: they are in `apps/pico-owlet/board.hpp`.
+
 Many servos reach their physical end stop before 500 or 2500 µs. The step-by-step procedure is in [`docs/CALIBRATION.md`](docs/CALIBRATION.md).
 
 ### Mounting the servo horns
@@ -673,10 +702,11 @@ Many servos reach their physical end stop before 500 or 2500 µs. The step-by-st
 
 ## Safety
 
-- **Limp at boot.** Every servo output is off after power-up or reset. Nothing moves until a computer sends `ENABLE`.
-- **The first `ENABLE` jumps.** A hobby servo moves to its first commanded position at full speed, because nothing can control its speed before it knows where it is. Use `ENABLE,<pan>,<tilt>` with the pose the head is actually in to keep that jump small.
+- **Limp at boot.** Every motor is off after power-up or reset. Nothing moves until a computer sends `ENABLE`.
+- **On the servo head, the first `ENABLE` jumps.** A hobby servo moves to its first commanded position at full speed, because nothing can control its speed before it knows where it is. Use `ENABLE,<pan>,<tilt>` with the pose the head is actually in to keep that jump small. A stepper never jumps: enabling it only names the position it is already in.
 - **No silent queuing.** Move commands sent while disabled are refused, not saved for later, so enabling never triggers an unexpected motion.
 - **Soft limits** are enforced in firmware. Set them inside your mechanism's hard stops.
+- **Limit switches, where fitted, outrank everything.** A switch closing cuts that motor's step pulses from its interrupt, without waiting for the control loop. The head then holds still and refuses to move until it has found its reference again, because it no longer knows where it is.
 
 ## Building from source
 
@@ -689,6 +719,7 @@ Everything below runs inside `nix develop`.
 ./build.py --esp --flash      # firmware + flash
 ./build.py --pico             # Pico stepper head: firmware only (apps/pico-owlet/build/pico_owlet.uf2)
 ./build.py --pico --flash     # firmware + load with picotool
+./build.py --docs             # API reference from the headers, in build/docs/html (Doxygen)
 ```
 
 Run one test suite or test:
@@ -699,7 +730,7 @@ build/host/tests/owlet_servo_test --gtest_filter='Servo.Slew*'
 cd tools/python && python -m unittest tests.test_protocol
 ```
 
-On a connected head (this **moves the servos**, within ±20° of centre at ≤ 20 °/s, and leaves them limp):
+On a connected head (this **moves the motors**, within ±20° of centre at ≤ 20 °/s, and leaves them limp):
 
 ```bash
 cd tools/python/tests && OWLET_HW=1 python -m unittest test_hardware -v    # OWLET_PORT=... to pick the port
@@ -713,20 +744,20 @@ It checks what the simulator can't: request round trip and `$POS` freshness on a
 
 ### Debug logs
 
-The USB port carries **only** protocol traffic. Firmware logs go to UART0: connect a USB-TTL adapter's RX to **GP43** (and GND), then open it at 115200 baud.
+The USB port carries **only** protocol traffic. On the ESP32 head, firmware logs go to UART0: connect a USB-TTL adapter's RX to **GP43** (and GND), then open it at 115200 baud. The Pico head prints no logs; ask it with `owlet dtc`, `owlet stat` and `owlet diag` instead.
 
 ## Project layout
 
 | Path | What's there |
 |------|--------------|
 | `apps/esp32-owlet/` | ESP-IDF firmware project for the servo head: entry point and Kconfig |
-| `apps/pico-owlet/` | pico-sdk firmware project for the stepper head: entry point, pin map and motion limits |
+| `apps/pico-owlet/` | pico-sdk firmware project for the stepper head: `main.cpp` wires it up, `board.hpp` describes the head (pins, motors, speeds, limits) |
 | `apps/host-sim/` | `owlet_sim`: the firmware core on a Linux pseudo-terminal |
-| `drivers/owlet_hal/` | Hardware interfaces: axis, axis calibration, servo channel, step generator, digital output, I²C, delay, serial port, clock |
+| `drivers/owlet_hal/` | Hardware interfaces: axis, axis calibration, servo channel, step generator, digital input and output, I²C, delay, serial port, clock, interrupt lock |
 | `drivers/owlet_pca9685/` | PCA9685 PWM driver |
 | `drivers/owlet_servo/` | Servo axis: angle ↔ pulse, speed-limited motion |
-| `drivers/owlet_stepper/` | Stepper axis: exact step counting, acceleration-limited motion; TMC2209 standalone helpers; shared enable line |
-| `firmware/common/owlet_core/` | Interfaces (`IPanTilt`, `IProtocol`, `ICalibration`), `PanTilt`, `ControlLoop`, `ProtocolMux`, `Calibrator` |
+| `drivers/owlet_stepper/` | Stepper axis: exact step counting, acceleration-limited motion, limit-switch guard; TMC2209 over UART and standalone; shared enable line |
+| `firmware/common/owlet_core/` | Interfaces (`IPanTilt`, `IProtocol`, `ICalibration`), `PanTilt`, `ControlLoop`, `ProtocolMux`, `Calibrator`; the event bus, trouble log and homing |
 | `firmware/common/owlet_text/` | The native text protocol: codec + `TextProtocol` |
 | `platform/owlet_esp32/` | ESP-IDF implementations of the hardware interfaces, NVS calibration store |
 | `platform/owlet_pico/` | pico-sdk implementations: USB CDC, clock, GPIO, PIO step generator, flash calibration store |
@@ -746,10 +777,12 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 | `could not auto-detect the owlet port` | No board, or several boards, found. Run `owlet ports`, then pass `-p PORT`. |
 | `Permission denied: '/dev/ttyACM…'` (Linux) | Add yourself to the group that owns the device (`ls -l /dev/ttyACM*`, usually `dialout` or `plugdev`), then log out and back in. |
 | `no answer from owlet` | Wrong port, firmware not flashed, or something else (e.g. a serial monitor) has the port open. |
-| `MOVE refused: DIS` | Servos are disabled. Run `owlet enable` first. |
+| `MOVE refused: DIS` | The motors are disabled. Run `owlet enable` first. |
+| `MOVE refused: LOST` | The head ran into a limit switch or failed to home, so it no longer trusts its position. Run `owlet seek`, or `owlet disable` and then `owlet enable PAN TILT` at a pose you know. `owlet dtc` says what happened. |
+| Something stopped and you don't know why | `owlet dtc`. |
 | `ENABLE refused: BUS` | The PCA9685 isn't answering. Check SDA/SCL (GP1/GP2), 3V3 to `VCC`, and the common GND. |
 | Board resets when the servos move | 5 V brown-out. Power the servos (`V+`) from a separate supply. |
-| An axis moves the wrong way | Swap that axis's min/max pulse ([Configuration](#configuration-and-calibration)). |
+| An axis moves the wrong way | Servo head: `owlet cal <axis> --reverse` ([Configuration](#configuration-and-calibration)). Stepper head: flip `kPanReversed` / `kTiltReversed` in `apps/pico-owlet/board.hpp`. |
 | Servo buzzes at the ends of travel | It's pressing on its end stop. Calibrate the endpoints or narrow the limits. |
 
 ## Project status and roadmap
@@ -769,10 +802,13 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 - [x] First motion of the stepper head: both axes swept and back on their marks
 - [x] Stepper head directions confirmed (pan + = camera's right, tilt + = up)
 - [x] Stepper head on 12 V: speed and acceleration limits measured and set
-- [ ] Re-run the servo head's hardware suite on firmware 0.4.0
+- [ ] Re-run the servo head on firmware 0.5.0. Until then it is untested on real hardware
 - [x] Stepper current set over the TMC2209 UART instead of the potentiometer; driver load and faults readable (`owlet diag`)
 - [ ] Stall detection: characterise the load value against speed and pick thresholds
-- [ ] Home sensors for the stepper head (it has no absolute position today)
+- [x] Event-driven firmware and client: the head announces changes (`$EVT`), Python handlers, trouble codes (`owlet dtc`)
+- [x] Limit switches and homing in firmware: interrupt cut-off, lost-position rule, `owlet seek` (tested in simulation)
+- [ ] Fit the limit switches to the stepper head and prove homing on it
+- [ ] Driver events (`ONLINE`, `FAULT`) checked on powered drivers
 - [ ] Track a real object with the webcam + YOLO example
 - [ ] Servo calibration for the reference mechanism ([`docs/CALIBRATION.md`](docs/CALIBRATION.md))
 - [ ] Verify the client on Windows and macOS
@@ -790,6 +826,7 @@ Issues and pull requests are welcome. Before opening a PR:
 2. Add or update tests for any behaviour you change. All device behaviour lives in `firmware/common/` so it can be tested on a PC.
 3. If you change the native protocol, update the firmware (`owlet_text`), the Python client, and `docs/DESIGN.md` §5 together.
 4. Keep firmware code free of dynamic allocation, exceptions and RTTI, following the existing style (C++17, Allman braces, `m_` member prefix).
+5. Name by intent: `handleXxx` for a command, `notifyXxx` for an announcement, `onXxx` for a reaction to one.
 
 ## License
 

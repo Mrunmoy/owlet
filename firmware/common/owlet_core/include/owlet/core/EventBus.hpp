@@ -53,6 +53,8 @@ public:
     /// @param storage       Room for `capacity` events.
     /// @param observers     `observerCount` listeners in delivery order. Null
     ///                      entries are free places for attach().
+    /// @param capacity      Events `storage` can hold.
+    /// @param observerCount Length of `observers`.
     EventBus(::owlet::hal::IInterruptLock& lock,
              const ::owlet::hal::IClock& clock,
              Event* storage,
@@ -95,7 +97,7 @@ private:
     [[nodiscard]] bool takeLost(Event& out);
     void deliver(const Event& event);
 
-    // Latch slots: two limit ends and one stall per axis.
+    /// Latch slots: two limit ends and one stall per axis.
     static constexpr std::size_t kLatchesPerAxis = 3;
     static constexpr std::size_t kLatchCount = kMaxAxes * kLatchesPerAxis;
 

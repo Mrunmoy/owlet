@@ -6,8 +6,8 @@
 namespace owlet::core
 {
 
-// IDiagnostics over one source per axis. Either may be null: that axis then
-// reports nothing available.
+/// IDiagnostics over one source per axis. Either may be null: that axis then
+/// reports nothing available.
 class HeadDiagnostics final : public IDiagnostics
 {
 public:

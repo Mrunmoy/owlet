@@ -9,9 +9,9 @@
 namespace owlet::core
 {
 
-// Lights an indicator while the head is moving. It wraps the motion layer as
-// an ITickable, so it slots between ControlLoop and any head without either
-// of them knowing, and it writes the output only when the state changes.
+/// Lights an indicator while the head is moving. It wraps the motion layer as
+/// an ITickable, so it slots between ControlLoop and any head without either
+/// of them knowing, and it writes the output only when the state changes.
 class ActivityIndicator final : public ITickable
 {
 public:

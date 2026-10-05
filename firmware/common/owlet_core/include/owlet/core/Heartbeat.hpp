@@ -8,8 +8,8 @@
 namespace owlet::core
 {
 
-// A short flash once per period: proof at a glance that the board is powered
-// and the control loop is running. A loop that hangs leaves the light stuck.
+/// A short flash once per period: proof at a glance that the board is powered
+/// and the control loop is running. A loop that hangs leaves the light stuck.
 class Heartbeat final : public ::owlet::hal::IPollable
 {
 public:

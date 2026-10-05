@@ -1,7 +1,7 @@
 #pragma once
 
 #include "owlet/core/Event.hpp"
-#include "owlet/core/IEventObserver.hpp"
+#include "owlet/core/EventDelegate.hpp"
 
 #include <array>
 #include <cstddef>
@@ -40,13 +40,11 @@ struct TroubleRecord
 /// can be answered after the fact. It listens to the event bus and keeps one
 /// record per kind of trouble per axis; a repeat raises the count. Nothing
 /// is stored across a power cycle.
-class TroubleLog final : public IEventObserver
+class TroubleLog final : public EventDelegate
 {
 public:
     /// One record for every code on each axis it can apply to.
     static constexpr std::size_t kCapacity = 16;
-
-    void onEvent(const Event& event) override;
 
     /// @return The number of records held.
     [[nodiscard]] std::size_t size() const
@@ -67,6 +65,49 @@ public:
     }
 
 private:
+    void onBusFault() override
+    {
+        record(TroubleCode::MotorBus, Event::kHead, 0);
+    }
+    void onWatchdogExpired() override
+    {
+        record(TroubleCode::WatchdogExpired, Event::kHead, 0);
+    }
+    void onDriverOffline(uint8_t axis) override
+    {
+        record(TroubleCode::DriverOffline, axis, 0);
+    }
+    void onDriverFaultChanged(uint8_t axis, uint16_t faults) override
+    {
+        if (faults != 0) // a fault clearing is good news
+        {
+            record(TroubleCode::DriverFault, axis, faults);
+        }
+    }
+    void onLimitHit(uint8_t axis, LimitEnd end) override
+    {
+        record(TroubleCode::LimitHit, axis, static_cast<uint16_t>(end));
+    }
+    void onPositionLost(uint8_t axis) override
+    {
+        record(TroubleCode::PositionLost, axis, 0);
+    }
+    void onStalled(uint8_t axis) override
+    {
+        record(TroubleCode::Stalled, axis, 0);
+    }
+    void onHomingFailed(uint8_t axis, uint16_t reason) override
+    {
+        record(TroubleCode::HomingFailed, axis, reason);
+    }
+    void onEventsLost(uint16_t count) override
+    {
+        record(TroubleCode::EventsLost, Event::kHead, count);
+    }
+
+    /// Adds one occurrence, stamped with the time of the event being handled.
+    void record(TroubleCode code, uint8_t axis, uint16_t detail);
+
     std::array<TroubleRecord, kCapacity> m_records{};
     std::size_t m_size{0};
 };

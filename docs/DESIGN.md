@@ -72,7 +72,7 @@ The tilt pair is deliberately not `STEP`, `DIR` in pin order: that is how the re
 | `3V3(OUT)` | `VIO` on both drivers | logic supply |
 | USB | PC | **protocol** only (no console anywhere) |
 
-`GP10`/`GP11` are kept free for home sensors. The drawing and the driver pinout are in [`wiring/pico-tmc2209/`](wiring/pico-tmc2209/README.md); the printable mechanism is in [`../mechanical/stepper-head/`](../mechanical/stepper-head/). The pin map and the motion limits are constants at the top of `apps/pico-owlet/main.cpp`.
+`GP10`/`GP11` (pan) and `GP14`/`GP15` (tilt) are set aside for the limit switches, two per axis. The drawing and the driver pinout are in [`wiring/pico-tmc2209/`](wiring/pico-tmc2209/README.md); the printable mechanism is in [`../mechanical/stepper-head/`](../mechanical/stepper-head/). The pin map and the motion limits are in `apps/pico-owlet/board.hpp`, the one file that describes this head.
 
 ## 4. Software architecture
 
@@ -154,7 +154,7 @@ There are three places to swap something, and each is one class or one folder:
 | `core::ICalibration` | `owlet_core` | Read, set, save and reset per-axis calibration. Implemented by `Calibrator`, which validates and enforces the enabled/disabled rules. |
 | `core::ICalibrationStore` | `owlet_core` | Persistence for calibration (NVS on ESP32, a flash sector on the Pico, a file in the simulator, a fake in tests). |
 | `core::ITickable` | `owlet_core` | `tick(dtMs) → TickStatus`: advance motion by elapsed time. Only the loop calls it, never a protocol. |
-| `core::IEventSink` / `core::IEventObserver` | `owlet_core` | Where a change is announced, and who reacts to it. `core::EventBus` joins them (see §4.2 and [design/EVENT_DRIVEN.md](design/EVENT_DRIVEN.md)). |
+| `core::EventNotifier` / `core::EventDelegate` | `owlet_core` | Where a change is announced (`notifyArrived()`, `notifyLimitHit(axis, end)`, …) and who reacts to it (`onArrived()`, `onLimitHit(axis, end)`, …). `core::EventBus` carries one to the other (see §4.2 and [design/EVENT_DRIVEN.md](design/EVENT_DRIVEN.md)). Underneath are the untyped `IEventSink` and `IEventObserver`. |
 | `core::IProtocol` | `owlet_core` | A wire protocol: `claims()` / `consume()` / `begin()` / `onTick()` (see §4.3). |
 
 The SOLID principles map onto this as follows:
@@ -412,6 +412,8 @@ $DTC,CLEAR    → $ACK,DTC
 
 ### 6.1 Servo mapping
 
+> **The servo head is untested on the current firmware.** It was last run on real hardware with firmware 0.3.0. Everything added since builds for the ESP32-S3 and passes the PC tests and the simulator, but it has not been flashed to a servo head again. Treat this path as unverified until someone re-runs it: `./build.py --esp --flash`, then `owlet selftest`.
+
 Each servo axis has a calibration of `minPulseUs`, `centerPulseUs`, `maxPulseUs` and `minDeg`/`maxDeg`, defaulting to 500/1500/2500 µs ↔ −90/0/+90°. On the wire and in storage these travel as the motor-neutral `hal::AxisCalibration` (three drive numbers and two limits); a stepper axis reports the drive numbers as zero and only its limits are adjustable. The mapping is **piecewise-linear through center**, so an asymmetric servo stays accurate at 0°. If `minPulseUs > maxPulseUs` the axis is reversed. The defaults are configurable per axis in Kconfig and get measured during bring-up.
 
 ### 6.2 Slew
@@ -448,6 +450,41 @@ So moves ramp up, ramp down onto the target and land on it exactly; reaching a s
 
 **Proven on hardware (2026-10-05):** on 12 V both axes, separately and together, ran clean at 360 °/s and 1920 °/s² and returned to their marks. The app allows 240 °/s and 1440 °/s², about two thirds of that, and reports them through `$CAPS`. The point where steps are actually lost was not reached.
 
+### 6.6 Limit switches, a lost position and homing
+
+The stepper head counts steps and has no sensor that says where the shaft is, so anything that makes the count wrong must be noticed and must stop the head trusting it. Two switches per axis, one at each end of travel, do that. They are optional: with none fitted (`kLimitSwitchesFitted = false` in `board.hpp`) nothing in this section is active.
+
+**Stopping.** Two independent things keep an axis from driving into its end stop:
+
+1. *The interrupt.* A switch closing runs `core::LimitTrip` in that pin's interrupt. It calls `IStepGenerator::halt()`, which on the Pico disables the PIO state machine, and posts `LimitHit`. The pulses stop without waiting for the control loop.
+2. *The level check.* Before each burst, `StepperAxis` reads the switch in the direction it is about to step and withholds the burst if it is pressed. This covers what an edge cannot: a switch already pressed at power-up, or one that closed while interrupts were off.
+
+On its next tick the axis finds its generator halted, ends the move with no braking ramp, marks itself `blocked()` and resumes the generator so that it can be driven away again.
+
+**Losing the position.** A burst was cut short, so the step count no longer matches the shaft. `PanTilt` sees the blocked axis, halts both axes, posts `PositionLost` and stops trusting its position:
+
+| While the position is lost | |
+|---|---|
+| `MOVE`, `NUDGE`, `HOME`, `VEL`, and `ENABLE,<pan>,<tilt>` on a powered head | `NAK,<CMD>,LOST` |
+| `STOP`, `DISABLE`, `POS`, everything that does not move | as normal |
+| The motors | stay powered and hold |
+| No `$ARRIVED` | is sent for the interrupted move |
+
+Trust comes back in one of two ways: `SEEK` succeeds, or the head is disabled and then enabled at a pose (`DISABLE`, `ENABLE,<pan>,<tilt>`), which is the user saying where it is.
+
+**Homing.** `$SEEK` starts `core::HeadHoming`, which homes tilt and then pan with one `core::AxisHoming` each:
+
+1. Drive toward the low switch at the seek speed until it closes.
+2. Back off, then approach again slowly. The slow approach sets the reference, so the result does not depend on the seek speed.
+3. Do the same at the high switch, measuring the travel between the two.
+4. Call the midpoint zero, set the soft limits a margin inside the switches, and go to zero.
+
+It works from any starting position, including resting on a switch. While it runs the head answers motion commands with `NAK,<CMD>,BSY`; `STOP` or `DISABLE` aborts it. It ends with `$EVT,HOMED,-,0`, or with `$EVT,HOMEFAIL,<axis>,<reason>` and the position still lost. Reasons: 1 no switch found within the search span, 2 a switch still pressed after backing off, 3 the measured travel does not fit what the axis allows, 4 aborted. Switches met while homing are expected and do not count as a lost position.
+
+A head with no switches answers `NAK,SEEK,UNS`.
+
+**Status:** all of this is tested on the PC, including two real `StepperAxis` objects on simulated mechanisms whose switches halt the generator on their closing edge. None of it has run on real switches yet.
+
 ## 7. PC side
 
 `tools/python/` is a pure-Python package (`pip install ./tools/python`; only needs `pyserial`):
@@ -480,5 +517,5 @@ Opening the port: on Linux (verified on hardware, 2026-10-01), opening the USB-S
 | 2 | Should a mandatory checksum be relaxed for hand-typing in a terminal (e.g. accept `*XX` as "no checksum")? | Start strict; the CLI covers interactive use. Revisit if people ask. |
 | 3 | Per-axis speed? | Not in v1. Add `SPEED,<pan>,<tilt>` later if needed. |
 | 4 | Homing for the stepper head: it has no absolute position, so zero is wherever it was enabled. | One sensor per axis (hall or optical) on `GP10`/`GP11` and a homing routine that ends in `engageAt()`. Sensorless homing through the TMC2209's stall detection needs the UART link and a hard stop. |
-| 5 | Should steps per degree and direction of a stepper be calibratable on the device, as servo pulses are? | Today they are build constants in `apps/pico-owlet/main.cpp` and the three drive numbers are zero. The neutral record has room for them. |
+| 5 | Should steps per degree and direction of a stepper be calibratable on the device, as servo pulses are? | Today they are build constants in `apps/pico-owlet/board.hpp` and the three drive numbers are zero. The neutral record has room for them. |
 | 6 | Where the stepper head actually loses steps. | Clean at 360 °/s and 1920 °/s² with a webcam; limits set to 240 and 1440. Find the edge only if more is ever needed, or when the camera gets heavier. |

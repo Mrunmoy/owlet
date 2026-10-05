@@ -5,20 +5,20 @@
 namespace owlet::core
 {
 
-// Everything a protocol may ask of a two-axis head. Protocols depend on this,
-// never on a concrete head, so a different motion backend (steppers, a
-// simulator, a test fake) works under every protocol unchanged.
+/// Everything a protocol may ask of a two-axis head. Protocols depend on this,
+/// never on a concrete head, so a different motion backend (steppers, a
+/// simulator, a test fake) works under every protocol unchanged.
 //
-// Angles are degrees from calibrated center: pan + = right, tilt + = up.
+/// Angles are degrees from calibrated center: pan + = right, tilt + = up.
 class IPanTilt
 {
 public:
     enum class Result : uint8_t
     {
         Ok,
-        Range,     // argument outside limits
-        Disabled,  // motion requested while disabled
-        Bus,       // hardware write failed
+        Range,     ///< argument outside limits
+        Disabled,  ///< motion requested while disabled
+        Bus,       ///< hardware write failed
         Untrusted,   ///< the head does not know where it is; home it or enable it at a pose
         Busy,        ///< homing is under way
         Unsupported, ///< this head cannot do that
@@ -37,13 +37,13 @@ public:
         float tilt;
     };
 
-    // What this head can do, for clients that adapt instead of probing.
+    /// What this head can do, for clients that adapt instead of probing.
     struct Capabilities
     {
-        float    speedMin;       // slew speed range for position moves, deg/s
+        float    speedMin;       ///< slew speed range for position moves, deg/s
         float    speedMax;
-        float    velocityMax;    // |rate| limit in velocity mode, deg/s
-        uint32_t watchdogMinMs;  // non-zero watchdog range (0 = off is also allowed)
+        float    velocityMax;    ///< |rate| limit in velocity mode, deg/s
+        uint32_t watchdogMinMs;  ///< non-zero watchdog range (0 = off is also allowed)
         uint32_t watchdogMaxMs;
     };
 
@@ -59,21 +59,21 @@ public:
 
     // ── Power ───────────────────────────────────────────────────────────────
 
-    // Energise at the last known position. No-op if already enabled.
+    /// Energise at the last known position. No-op if already enabled.
     [[nodiscard]] virtual Result enable() = 0;
-    // Energise at a pose (snap). If already enabled, a slewed move instead.
+    /// Energise at a pose (snap). If already enabled, a slewed move instead.
     [[nodiscard]] virtual Result enableAt(float panDeg, float tiltDeg) = 0;
     [[nodiscard]] virtual Result disable() = 0;
 
     // ── Motion ──────────────────────────────────────────────────────────────
 
-    // Absolute; Range if outside limits. Replaces any current goal.
+    /// Absolute; Range if outside limits. Replaces any current goal.
     [[nodiscard]] virtual Result move(float panDeg, float tiltDeg) = 0;
-    // Relative to the current target; clamps to limits.
+    /// Relative to the current target; clamps to limits.
     [[nodiscard]] virtual Result nudge(float dPanDeg, float dTiltDeg) = 0;
     [[nodiscard]] virtual Result home() = 0;
     [[nodiscard]] virtual Result stop() = 0;
-    // Slew speed for position moves, deg/s.
+    /// Slew speed for position moves, deg/s.
     [[nodiscard]] virtual Result setSpeed(float degPerSec) = 0;
 
     /// Finds the reference position from the head's limit switches. The
@@ -88,11 +88,11 @@ public:
 
     // ── Velocity mode ───────────────────────────────────────────────────────
 
-    // Turn at signed rates (deg/s) until told otherwise; stops at soft limits.
-    // Any position command ends it. Each call re-arms the watchdog.
+    /// Turn at signed rates (deg/s) until told otherwise; stops at soft limits.
+    /// Any position command ends it. Each call re-arms the watchdog.
     [[nodiscard]] virtual Result setVelocity(float panDegPerSec, float tiltDegPerSec) = 0;
-    // Velocity mode stops itself if not refreshed within this period.
-    // 0 disables the watchdog; otherwise kMinWatchdogMs..kMaxWatchdogMs.
+    /// Velocity mode stops itself if not refreshed within this period.
+    /// 0 disables the watchdog; otherwise kMinWatchdogMs..kMaxWatchdogMs.
     [[nodiscard]] virtual Result setWatchdog(uint32_t ms) = 0;
     [[nodiscard]] virtual uint32_t watchdogMs() const = 0;
 

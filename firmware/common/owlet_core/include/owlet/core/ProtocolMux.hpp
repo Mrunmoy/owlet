@@ -9,19 +9,19 @@
 namespace owlet::core
 {
 
-// Runs several protocols on one byte stream.
+/// Runs several protocols on one byte stream.
 //
-// The first byte of each frame is offered to the protocols in order; the
-// first that claims it owns the stream until it reports `released`. An owner
-// may also hand back a byte it doesn't want ({0, released}), which is then
-// offered to the others. Bytes nobody claims are returned to the caller, which
-// drops them (boot banners, line noise). The mux is itself an IProtocol, so it can stand anywhere a single
-// protocol can, including inside another mux.
+/// The first byte of each frame is offered to the protocols in order; the
+/// first that claims it owns the stream until it reports `released`. An owner
+/// may also hand back a byte it doesn't want ({0, released}), which is then
+/// offered to the others. Bytes nobody claims are returned to the caller, which
+/// drops them (boot banners, line noise). The mux is itself an IProtocol, so it can stand anywhere a single
+/// protocol can, including inside another mux.
 //
-//   TextProtocol   native(usb, head, version);
-//   MyProtocol     mine(usb, head);
-//   ProtocolMux<2> mux({&native, &mine});
-//   ControlLoop    loop(usb, head, mux);
+///   TextProtocol   native(usb, head, version);
+///   MyProtocol     mine(usb, head);
+///   ProtocolMux<2> mux({&native, &mine});
+///   ControlLoop    loop(usb, head, mux);
 template <std::size_t N>
 class ProtocolMux final : public IProtocol
 {
@@ -127,7 +127,7 @@ private:
     std::array<IProtocol*, N> m_protocols;
     IProtocol*                m_owner{nullptr};
     bool                      m_atLineStart{true};
-    mutable bool              m_hintPending{false};   // set by claims(), used by consume()
+    mutable bool              m_hintPending{false};   ///< set by claims(), used by consume()
     mutable bool              m_hintLineStart{false};
 };
 

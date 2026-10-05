@@ -5,8 +5,8 @@
 namespace owlet::hal
 {
 
-// Monotonic millisecond clock. Wraps after 2^32 ms (~49.7 days); consumers
-// must compare times with unsigned or signed-difference arithmetic.
+/// Monotonic millisecond clock. Wraps after 2^32 ms (~49.7 days); consumers
+/// must compare times with unsigned or signed-difference arithmetic.
 class IClock
 {
 public:

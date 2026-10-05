@@ -84,122 +84,110 @@ void TextProtocol::begin(uint32_t nowMs)
     sendVersioned("READY");
 }
 
-void TextProtocol::onEvent(const ::owlet::core::Event& event)
-{
-    using ::owlet::core::EventId;
-    switch (event.id)
-    {
-    case EventId::BusFault:
-        sendErr("BUS");
-        break;
-    case EventId::WatchdogExpired:
-        m_writer.begin("TIMEOUT");
-        m_writer.field("VEL");
-        flush();
-        break;
-    case EventId::Arrived:
-        // Only the link that asked for the move is told it finished.
-        if (m_awaitingArrival)
-        {
-            m_awaitingArrival      = false;
-            const IPanTilt::Pose p = m_head.position();
-            m_writer.begin("ARRIVED");
-            m_writer.fixed1(p.pan);
-            m_writer.fixed1(p.tilt);
-            flush();
-        }
-        break;
-    case EventId::BusOk:
-    case EventId::LimitHit:
-    case EventId::Homed:
-    case EventId::HomingFailed:
-    case EventId::PositionLost:
-    case EventId::Stalled:
-    case EventId::DriverFaultChanged:
-    case EventId::DriverOnline:
-    case EventId::DriverOffline:
-    case EventId::EventsLost:
-        if (m_eventLines)
-        {
-            sendEvent(event);
-        }
-        break;
-    }
-}
+// ── What the head announces ─────────────────────────────────────────────────
+// Three have had lines of their own since before $EVT existed, and keep them.
 
-void TextProtocol::executeDtc(const Request& req)
+void TextProtocol::onArrived()
 {
-    // $DTC          → $DTC,<count>
-    // $DTC,<index>  → $DTC,<index>,<code>,<PAN|TILT|->,<times>,<detail>,<first_ms>,<last_ms>
-    // $DTC,CLEAR    → $ACK,DTC
-    const std::size_t count = (m_trouble != nullptr) ? m_trouble->size() : 0;
-    if (req.token == "CLEAR")
+    // Only the link that asked for the move is told it finished.
+    if (!m_awaitingArrival)
     {
-        if (m_trouble != nullptr)
-        {
-            m_trouble->clear();
-        }
-        sendAck(req.command);
         return;
     }
-    if (req.argCount == 0)
-    {
-        m_writer.begin("DTC");
-        m_writer.uint(static_cast<uint32_t>(count));
-        flush();
-        return;
-    }
-    const std::size_t index = static_cast<std::size_t>(req.args[0]);
-    if (index >= count)
-    {
-        sendNak(req.command, "RNG");
-        return;
-    }
-    const ::owlet::core::TroubleRecord& r = m_trouble->at(index);
-    m_writer.begin("DTC");
-    m_writer.uint(static_cast<uint32_t>(index));
-    m_writer.uint(static_cast<uint32_t>(r.code));
-    m_writer.field(r.axis == 0 ? "PAN" : (r.axis == 1 ? "TILT" : "-"));
-    m_writer.uint(r.count);
-    m_writer.uint(r.detail);
-    m_writer.uint(r.firstMs);
-    m_writer.uint(r.lastMs);
+    m_awaitingArrival      = false;
+    const IPanTilt::Pose p = m_head.position();
+    m_writer.begin("ARRIVED");
+    m_writer.fixed1(p.pan);
+    m_writer.fixed1(p.tilt);
     flush();
 }
 
-void TextProtocol::sendEvent(const ::owlet::core::Event& event)
+void TextProtocol::onWatchdogExpired()
 {
-    using ::owlet::core::EventId;
-    // $EVT,<name>,<PAN|TILT|->,<arg>
-    std::string_view name = "?";
-    switch (event.id)
+    m_writer.begin("TIMEOUT");
+    m_writer.field("VEL");
+    flush();
+}
+
+void TextProtocol::onBusFault()
+{
+    sendErr("BUS");
+}
+
+void TextProtocol::onBusOk()
+{
+    sendEvt("BUSOK", ::owlet::core::Event::kHead, 0);
+}
+
+void TextProtocol::onLimitHit(uint8_t axis, ::owlet::core::LimitEnd end)
+{
+    sendEvt("LIMIT", axis, end == ::owlet::core::LimitEnd::Min ? "MIN" : "MAX");
+}
+
+void TextProtocol::onPositionLost(uint8_t axis)
+{
+    sendEvt("LOST", axis, 0);
+}
+
+void TextProtocol::onStalled(uint8_t axis)
+{
+    sendEvt("STALL", axis, 0);
+}
+
+void TextProtocol::onHomed()
+{
+    sendEvt("HOMED", ::owlet::core::Event::kHead, 0);
+}
+
+void TextProtocol::onHomingFailed(uint8_t axis, uint16_t reason)
+{
+    sendEvt("HOMEFAIL", axis, reason);
+}
+
+void TextProtocol::onDriverOnline(uint8_t axis)
+{
+    sendEvt("ONLINE", axis, 0);
+}
+
+void TextProtocol::onDriverOffline(uint8_t axis)
+{
+    sendEvt("OFFLINE", axis, 0);
+}
+
+void TextProtocol::onDriverFaultChanged(uint8_t axis, uint16_t faults)
+{
+    sendEvt("FAULT", axis, faults);
+}
+
+void TextProtocol::onEventsLost(uint16_t count)
+{
+    sendEvt("OVERFLOW", ::owlet::core::Event::kHead, count);
+}
+
+// $EVT,<name>,<PAN|TILT|->,<arg>, unless $EVENTS,0 has turned these off.
+void TextProtocol::sendEvt(std::string_view name, uint8_t axis, std::string_view arg)
+{
+    if (!m_eventLines)
     {
-    case EventId::BusOk:              name = "BUSOK";    break;
-    case EventId::LimitHit:           name = "LIMIT";    break;
-    case EventId::Homed:              name = "HOMED";    break;
-    case EventId::HomingFailed:       name = "HOMEFAIL"; break;
-    case EventId::PositionLost:       name = "LOST";     break;
-    case EventId::Stalled:            name = "STALL";    break;
-    case EventId::DriverFaultChanged: name = "FAULT";    break;
-    case EventId::DriverOnline:       name = "ONLINE";   break;
-    case EventId::DriverOffline:      name = "OFFLINE";  break;
-    case EventId::EventsLost:         name = "OVERFLOW"; break;
-    case EventId::Arrived:
-    case EventId::WatchdogExpired:
-    case EventId::BusFault:
-        return;  // these have lines of their own
+        return;
     }
     m_writer.begin("EVT");
     m_writer.field(name);
-    m_writer.field(event.axis == 0 ? "PAN" : (event.axis == 1 ? "TILT" : "-"));
-    if (event.id == EventId::LimitHit)
+    m_writer.field(axis == 0 ? "PAN" : (axis == 1 ? "TILT" : "-"));
+    m_writer.field(arg);
+    flush();
+}
+
+void TextProtocol::sendEvt(std::string_view name, uint8_t axis, uint16_t arg)
+{
+    if (!m_eventLines)
     {
-        m_writer.field(event.arg == static_cast<uint16_t>(::owlet::core::LimitEnd::Min) ? "MIN" : "MAX");
+        return;
     }
-    else
-    {
-        m_writer.uint(event.arg);
-    }
+    m_writer.begin("EVT");
+    m_writer.field(name);
+    m_writer.field(axis == 0 ? "PAN" : (axis == 1 ? "TILT" : "-"));
+    m_writer.uint(arg);
     flush();
 }
 
@@ -240,7 +228,7 @@ void TextProtocol::handleFrame(std::string_view frame)
     switch (parseRequest(sentence, req))
     {
     case RequestStatus::Ok:
-        execute(req);
+        dispatch(req);
         break;
     case RequestStatus::BadFormat:
         sendNak(req.command, "FMT");
@@ -251,168 +239,249 @@ void TextProtocol::handleFrame(std::string_view frame)
     }
 }
 
-void TextProtocol::execute(const Request& req)
+void TextProtocol::dispatch(const Request& req)
 {
     switch (req.command)
     {
-    case Command::Ping:
-        sendVersioned("PONG");
-        return;
-    case Command::Enable:
-    {
-        // Only ENABLE,<pan>,<tilt> on an already-powered head is a move (and
-        // earns ARRIVED); from disabled it is a snap, and bare ENABLE moves nothing.
-        const bool   wasEnabled = m_head.state() != IPanTilt::State::Disabled;
-        const Result r = req.argCount == 2 ? m_head.enableAt(req.args[0], req.args[1]) : m_head.enable();
-        if (r == Result::Ok && req.argCount == 2 && wasEnabled)
-        {
-            m_awaitingArrival = true;
-        }
-        sendResult(req.command, r);
-        return;
+    case Command::Ping:     handlePing(req); break;
+    case Command::Enable:   handleEnable(req); break;
+    case Command::Disable:  handleDisable(req); break;
+    case Command::Move:     handleMove(req); break;
+    case Command::Nudge:    handleNudge(req); break;
+    case Command::Home:     handleHome(req); break;
+    case Command::Stop:     handleStop(req); break;
+    case Command::Speed:    handleSpeed(req); break;
+    case Command::Pos:      handlePos(req); break;
+    case Command::Stream:   handleStream(req); break;
+    case Command::Vel:      handleVel(req); break;
+    case Command::Watchdog: handleWatchdog(req); break;
+    case Command::Clock:    handleClock(req); break;
+    case Command::Caps:     handleCaps(req); break;
+    case Command::Cal:      handleCal(req); break;
+    case Command::Diag:     handleDiag(req); break;
+    case Command::Events:   handleEvents(req); break;
+    case Command::Dtc:      handleDtc(req); break;
+    case Command::Seek:     handleSeek(req); break;
+    case Command::Stat:     handleStat(req); break;
+    case Command::Limits:   handleLimits(req); break;
     }
-    case Command::Disable:
+}
+
+// ── Commands ────────────────────────────────────────────────────────────────
+
+void TextProtocol::handlePing(const Request& /*req*/)
+{
+    sendVersioned("PONG");
+}
+
+void TextProtocol::handleEnable(const Request& req)
+{
+    // Only ENABLE,<pan>,<tilt> on an already-powered head is a move (and
+    // earns ARRIVED); from disabled it is a snap, and bare ENABLE moves nothing.
+    const bool   wasEnabled = m_head.state() != IPanTilt::State::Disabled;
+    const Result r = req.argCount == 2 ? m_head.enableAt(req.args[0], req.args[1]) : m_head.enable();
+    if (r == Result::Ok && req.argCount == 2 && wasEnabled)
+    {
+        m_awaitingArrival = true;
+    }
+    sendResult(req.command, r);
+}
+
+void TextProtocol::handleDisable(const Request& req)
+{
+    m_awaitingArrival = false;
+    sendResult(req.command, m_head.disable());
+}
+
+void TextProtocol::handleMove(const Request& req)
+{
+    sendResult(req.command, m_head.move(req.args[0], req.args[1]));
+}
+
+void TextProtocol::handleNudge(const Request& req)
+{
+    sendResult(req.command, m_head.nudge(req.args[0], req.args[1]));
+}
+
+void TextProtocol::handleHome(const Request& req)
+{
+    sendResult(req.command, m_head.home());
+}
+
+void TextProtocol::handleStop(const Request& req)
+{
+    const Result r = m_head.stop();
+    if (r == Result::Ok)
+    {
         m_awaitingArrival = false;
-        sendResult(req.command, m_head.disable());
-        return;
-    case Command::Move:
-        sendResult(req.command, m_head.move(req.args[0], req.args[1]));
-        return;
-    case Command::Nudge:
-        sendResult(req.command, m_head.nudge(req.args[0], req.args[1]));
-        return;
-    case Command::Home:
-        sendResult(req.command, m_head.home());
-        return;
-    case Command::Stop:
+    }
+    sendResult(req.command, r);
+}
+
+void TextProtocol::handleSpeed(const Request& req)
+{
+    if (req.argCount == 0)
     {
-        const Result r = m_head.stop();
-        if (r == Result::Ok)
-        {
-            m_awaitingArrival = false;
-        }
-        sendResult(req.command, r);
+        m_writer.begin("SPEED");
+        m_writer.fixed1(m_head.speed());
+        flush();
         return;
     }
-    case Command::Speed:
-        if (req.argCount == 0)
-        {
-            m_writer.begin("SPEED");
-            m_writer.fixed1(m_head.speed());
-            flush();
-            return;
-        }
-        sendResult(req.command, m_head.setSpeed(req.args[0]));
-        return;
-    case Command::Pos:
-        sendPos();
-        return;
-    case Command::Stream:
+    sendResult(req.command, m_head.setSpeed(req.args[0]));
+}
+
+void TextProtocol::handlePos(const Request& /*req*/)
+{
+    sendPos();
+}
+
+void TextProtocol::handleStream(const Request& req)
+{
+    const uint32_t hz = static_cast<uint32_t>(req.args[0]);
+    if (hz > kMaxStreamHz)
     {
-        const uint32_t hz = static_cast<uint32_t>(req.args[0]);
-        if (hz > kMaxStreamHz)
+        sendNak(req.command, "RNG");
+        return;
+    }
+    m_streamPeriodMs = (hz == 0) ? 0 : 1000U / hz;
+    m_nextStreamMs   = m_nowMs + m_streamPeriodMs;
+    sendAck(req.command);
+}
+
+void TextProtocol::handleVel(const Request& req)
+{
+    const Result r = m_head.setVelocity(req.args[0], req.args[1]);
+    if (r == Result::Ok)
+    {
+        m_awaitingArrival = false;  // velocity mode never "arrives"
+    }
+    sendResult(req.command, r);
+}
+
+void TextProtocol::handleWatchdog(const Request& req)
+{
+    if (req.argCount == 0)
+    {
+        m_writer.begin("WATCHDOG");
+        m_writer.uint(m_head.watchdogMs());
+        flush();
+        return;
+    }
+    sendResult(req.command, m_head.setWatchdog(static_cast<uint32_t>(req.args[0])));
+}
+
+void TextProtocol::handleClock(const Request& /*req*/)
+{
+    // The live clock, not the tick time: this is the sample a host uses
+    // to estimate the clock offset, so it must be as fresh as possible.
+    m_writer.begin("CLOCK");
+    m_writer.uint(m_clock.nowMs());
+    flush();
+}
+
+void TextProtocol::handleCaps(const Request& /*req*/)
+{
+    const IPanTilt::Capabilities c = m_head.capabilities();
+    m_writer.begin("CAPS");
+    m_writer.fixed1(c.speedMin);
+    m_writer.fixed1(c.speedMax);
+    m_writer.fixed1(c.velocityMax);
+    m_writer.uint(c.watchdogMinMs);
+    m_writer.uint(c.watchdogMaxMs);
+    m_writer.uint(kMaxStreamHz);
+    flush();
+}
+
+void TextProtocol::handleDiag(const Request& req)
+{
+    sendDiag(req.token == "PAN" ? ::owlet::core::Axis::Pan : ::owlet::core::Axis::Tilt,
+             req.token);
+}
+
+void TextProtocol::handleEvents(const Request& req)
+{
+    if (req.args[0] > 1.0f)
+    {
+        sendNak(req.command, "RNG");
+        return;
+    }
+    m_eventLines = req.args[0] != 0.0f;
+    sendAck(req.command);
+}
+
+void TextProtocol::handleSeek(const Request& req)
+{
+    sendResult(req.command, m_head.seekHome());
+}
+
+void TextProtocol::handleStat(const Request& /*req*/)
+{
+    // $STAT,<events posted>,<events dropped>,<most ever waiting>,<late passes>,<longest pass ms>
+    const ::owlet::core::EventBus::Stats stats =
+        (m_events != nullptr) ? m_events->stats() : ::owlet::core::EventBus::Stats{};
+    m_writer.begin("STAT");
+    m_writer.uint(stats.posted);
+    m_writer.uint(stats.dropped);
+    m_writer.uint(stats.highWater);
+    m_writer.uint((m_loop != nullptr) ? m_loop->lateTicks : 0U);
+    m_writer.uint((m_loop != nullptr) ? m_loop->worstTickMs : 0U);
+    flush();
+}
+
+void TextProtocol::handleLimits(const Request& /*req*/)
+{
+    const IPanTilt::Limits lim = m_head.limits();
+    m_writer.begin("LIMITS");
+    m_writer.fixed1(lim.panMin);
+    m_writer.fixed1(lim.panMax);
+    m_writer.fixed1(lim.tiltMin);
+    m_writer.fixed1(lim.tiltMax);
+    flush();
+}
+
+void TextProtocol::handleDtc(const Request& req)
+{
+    // $DTC          → $DTC,<count>
+    // $DTC,<index>  → $DTC,<index>,<code>,<PAN|TILT|->,<times>,<detail>,<first_ms>,<last_ms>
+    // $DTC,CLEAR    → $ACK,DTC
+    const std::size_t count = (m_trouble != nullptr) ? m_trouble->size() : 0;
+    if (req.token == "CLEAR")
+    {
+        if (m_trouble != nullptr)
         {
-            sendNak(req.command, "RNG");
-            return;
+            m_trouble->clear();
         }
-        m_streamPeriodMs = (hz == 0) ? 0 : 1000U / hz;
-        m_nextStreamMs   = m_nowMs + m_streamPeriodMs;
         sendAck(req.command);
         return;
     }
-    case Command::Vel:
+    if (req.argCount == 0)
     {
-        const Result r = m_head.setVelocity(req.args[0], req.args[1]);
-        if (r == Result::Ok)
-        {
-            m_awaitingArrival = false;  // velocity mode never "arrives"
-        }
-        sendResult(req.command, r);
-        return;
-    }
-    case Command::Watchdog:
-        if (req.argCount == 0)
-        {
-            m_writer.begin("WATCHDOG");
-            m_writer.uint(m_head.watchdogMs());
-            flush();
-            return;
-        }
-        sendResult(req.command, m_head.setWatchdog(static_cast<uint32_t>(req.args[0])));
-        return;
-    case Command::Clock:
-        // The live clock, not the tick time: this is the sample a host uses
-        // to estimate the clock offset, so it must be as fresh as possible.
-        m_writer.begin("CLOCK");
-        m_writer.uint(m_clock.nowMs());
-        flush();
-        return;
-    case Command::Caps:
-    {
-        const IPanTilt::Capabilities c = m_head.capabilities();
-        m_writer.begin("CAPS");
-        m_writer.fixed1(c.speedMin);
-        m_writer.fixed1(c.speedMax);
-        m_writer.fixed1(c.velocityMax);
-        m_writer.uint(c.watchdogMinMs);
-        m_writer.uint(c.watchdogMaxMs);
-        m_writer.uint(kMaxStreamHz);
+        m_writer.begin("DTC");
+        m_writer.uint(static_cast<uint32_t>(count));
         flush();
         return;
     }
-    case Command::Cal:
-        executeCal(req);
-        return;
-    case Command::Diag:
-        sendDiag(req.token == "PAN" ? ::owlet::core::Axis::Pan : ::owlet::core::Axis::Tilt,
-                 req.token);
-        return;
-    case Command::Events:
-        if (req.args[0] > 1.0f)
-        {
-            sendNak(req.command, "RNG");
-            return;
-        }
-        m_eventLines = req.args[0] != 0.0f;
-        sendAck(req.command);
-        return;
-    case Command::Dtc:
-        executeDtc(req);
-        return;
-    case Command::Seek:
-        sendResult(req.command, m_head.seekHome());
-        return;
-    case Command::Stat:
+    const std::size_t index = static_cast<std::size_t>(req.args[0]);
+    if (index >= count)
     {
-        // $STAT,<events posted>,<events dropped>,<most ever waiting>,<late passes>,<longest pass ms>
-        const ::owlet::core::EventBus::Stats stats =
-            (m_events != nullptr) ? m_events->stats() : ::owlet::core::EventBus::Stats{};
-        m_writer.begin("STAT");
-        m_writer.uint(stats.posted);
-        m_writer.uint(stats.dropped);
-        m_writer.uint(stats.highWater);
-        m_writer.uint((m_loop != nullptr) ? m_loop->lateTicks : 0U);
-        m_writer.uint((m_loop != nullptr) ? m_loop->worstTickMs : 0U);
-        flush();
+        sendNak(req.command, "RNG");
         return;
     }
-    case Command::Limits:
-    {
-        const IPanTilt::Limits lim = m_head.limits();
-        m_writer.begin("LIMITS");
-        m_writer.fixed1(lim.panMin);
-        m_writer.fixed1(lim.panMax);
-        m_writer.fixed1(lim.tiltMin);
-        m_writer.fixed1(lim.tiltMax);
-        flush();
-        return;
-    }
-    }
+    const ::owlet::core::TroubleRecord& r = m_trouble->at(index);
+    m_writer.begin("DTC");
+    m_writer.uint(static_cast<uint32_t>(index));
+    m_writer.uint(static_cast<uint32_t>(r.code));
+    m_writer.field(r.axis == 0 ? "PAN" : (r.axis == 1 ? "TILT" : "-"));
+    m_writer.uint(r.count);
+    m_writer.uint(r.detail);
+    m_writer.uint(r.firstMs);
+    m_writer.uint(r.lastMs);
+    flush();
 }
 
 // ── Calibration (v3) ────────────────────────────────────────────────────────
 
-void TextProtocol::executeCal(const Request& req)
+void TextProtocol::handleCal(const Request& req)
 {
     using ::owlet::core::Axis;
     using CalResult = ::owlet::core::ICalibration::Result;

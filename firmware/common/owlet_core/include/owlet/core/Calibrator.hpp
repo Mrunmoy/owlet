@@ -8,14 +8,14 @@
 namespace owlet::core
 {
 
-// Owns the head's calibration: asks each axis whether it accepts a change,
-// applies it, enforces "drive changes only while disabled", and persists
-// through an injected ICalibrationStore. It knows nothing about the motor
-// type: what a valid calibration is belongs to the axis.
+/// Owns the head's calibration: asks each axis whether it accepts a change,
+/// applies it, enforces "drive changes only while disabled", and persists
+/// through an injected ICalibrationStore. It knows nothing about the motor
+/// type: what a valid calibration is belongs to the axis.
 class Calibrator final : public ICalibration
 {
 public:
-    // `head` is only read (to know whether the axes are powered).
+    /// `head` is only read (to know whether the axes are powered).
     Calibrator(::owlet::hal::IAxisCalibration& pan,
                ::owlet::hal::IAxisCalibration& tilt,
                const IPanTilt& head,
@@ -25,8 +25,8 @@ public:
     Calibrator(const Calibrator&) = delete;
     Calibrator& operator=(const Calibrator&) = delete;
 
-    // Apply the saved calibration if a valid one exists, else the factory one.
-    // Call at boot, before the head is enabled.
+    /// Apply the saved calibration if a valid one exists, else the factory one.
+    /// Call at boot, before the head is enabled.
     void begin();
 
     // ── ICalibration ────────────────────────────────────────────────────────
@@ -40,8 +40,8 @@ public:
         return m_source;
     }
 
-    // False if the factory (build-time) record failed validation; the invalid
-    // axis then uses its own defaultCalibration().
+    /// False if the factory (build-time) record failed validation; the invalid
+    /// axis then uses its own defaultCalibration().
     [[nodiscard]] bool factoryWasValid() const
     {
         return m_factoryValid;

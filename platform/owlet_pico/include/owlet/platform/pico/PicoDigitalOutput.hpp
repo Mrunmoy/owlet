@@ -7,10 +7,10 @@
 namespace owlet::platform::pico
 {
 
-// One GPIO as a logical output. The electrical polarity lives here, so an
-// active-low line (a stepper driver's EN) reads the same upstream as an
-// active-high one. The pin is driven to its *off* level before it becomes an
-// output, so nothing glitches on at boot.
+/// One GPIO as a logical output. The electrical polarity lives here, so an
+/// active-low line (a stepper driver's EN) reads the same upstream as an
+/// active-high one. The pin is driven to its *off* level before it becomes an
+/// output, so nothing glitches on at boot.
 class PicoDigitalOutput final : public ::owlet::hal::IDigitalOutput
 {
 public:

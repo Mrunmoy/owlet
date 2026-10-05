@@ -3,13 +3,13 @@
 
     python3 make_wiring.py && convert -density 110 wiring.svg wiring.png
 
-The pin map here must match the constants at the top of apps/pico-owlet/main.cpp.
+The pin map here must match apps/pico-owlet/board.hpp.
 """
 
-W, H = 1560, 1500
+W, H = 1560, 1720
 C = dict(v12="#d62728", gnd="#222222", v33="#e8890c", step="#1f77b4", dir="#2ca02c",
          en="#8a56c2", ms1="#8c564b", ms2="#d6519f", uart="#149aa8", led="#c9a100",
-         coil="#888888", off="#aaaaaa")
+         coil="#888888", off="#aaaaaa", sw="#5a8f29")
 out = []
 
 
@@ -51,7 +51,7 @@ def ry(pin):        # y of a right-row pin, by pin number 40..21
 
 # net colour for each used Pico pin
 USED_L = {1: "uart", 2: "uart", 4: "step", 5: "dir", 6: "uart", 7: "uart", 9: "dir",
-          10: "step", 11: "en", 16: "ms1", 17: "ms2"}
+          10: "step", 11: "en", 14: "sw", 15: "sw", 16: "ms1", 17: "ms2", 19: "sw", 20: "sw"}
 USED_R = {38: "gnd", 36: "v33", 29: "led"}
 
 box(PX0, PY0 - 42, PX1 - PX0, 19 * PITCH + 84, "#f6d5e2")
@@ -163,6 +163,28 @@ line([(650, yl), (664, yl)], C["v33"], 4)
 text(600, yl - 18, "LED", 12, "middle", "#555")
 text(635, yl - 14, "R", 12, "middle", "#555")
 text(640, yl + 28, "3V3", 13, "middle", C["v33"], "bold")
+
+# ── Limit switches: drawn apart, to keep the main picture readable ──
+SY = 1480
+out.append(f'<rect x="40" y="{SY}" width="{W - 80}" height="200" rx="12" fill="#f3f8ee" '
+           f'stroke="{C["sw"]}" stroke-width="3" stroke-dasharray="10 7"/>')
+text(64, SY + 34, "Limit switches: optional, two per axis", 20, "start", C["sw"], "bold")
+text(64, SY + 60, "Each one normally-closed, between its pin and any Pico GND (pins 13 and 18 are next to them). "
+     "No resistor: the Pico's pull-up is used.", 15, "start", "#333")
+for i, (pin, gp, where) in enumerate([(14, "GP10", "pan − end (camera's left)"), (15, "GP11", "pan + end (camera's right)"),
+                                      (19, "GP14", "tilt − end (down)"), (20, "GP15", "tilt + end (up)")]):
+    x, y = 70 + i * 368, SY + 118
+    text(x, y + 6, f"{pin}  {gp}", 17, "start", C["sw"], "bold")
+    line([(x + 96, y), (x + 150, y)], C["sw"], 4)
+    dot(x + 150, y, C["sw"], 5)
+    line([(x + 150, y), (x + 196, y - 6)], "#111", 3)          # the closed contact
+    dot(x + 196, y, C["sw"], 5)
+    line([(x + 196, y), (x + 250, y)], C["gnd"], 4)
+    text(x + 258, y + 6, "GND", 16, "start", C["gnd"], "bold")
+    text(x + 173, y - 18, "COM   NC", 11, "middle", "#555")
+    text(x + 96, y + 40, where, 15, "start", "#333")
+text(64, SY + 186, "Pressed = contact opens = pin reads high. A broken wire reads as pressed, so a fault stops the axis.",
+     14, "start", "#555")
 
 # ── Titles and notes ────────────────────────────────────────────
 text(W / 2, 52, "Pico → two TMC2209 drivers", 36, "middle", weight="bold")

@@ -104,3 +104,7 @@ Motors and drivers stayed cool throughout. The only noise was the printed parts 
 **Limits set in the firmware:** 240 °/s and 1440 °/s², about two thirds of what ran clean. Neither axis was pushed to the point of losing steps, so the true limits are higher and unknown.
 
 **Calibration storage:** a limits change saved with `owlet cal save` was still there after a reset (`picotool reboot`), and `owlet cal reset` restored the factory values. Not tried across a full power cycle.
+
+### Re-check from the Raspberry Pi, 2026-10-09
+
+The Pico was moved to the Pi (`pi3b`) and the motors re-plugged. Both drivers answered at 458 mA with no faults. Pan + = camera's right and tilt + = up, unchanged. `owlet selftest --yes`: 16 passed, 0 failed, 1 skipped (home switches): pan ±45° and tilt ±30° at 60, 120 and 240 °/s, and both together at 120 °/s. Back on both marks by eye. The stored limits are unchanged (pan ±90, tilt ±60, saved).

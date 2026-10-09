@@ -94,10 +94,23 @@ xa         = yoke_gap / 2;                         // inner face of arm A
 
 // ── Cradle ──────────────────────────────────────────────────────
 cheek_t    = 8;
-plat_drop  = 18;       // platform top below tilt axis (camera CoM near axis)
+plat_drop  = 10;       // platform face to tilt axis. Was 18; the head is used with the cradle
+                       // inverted and the camera on top, so the nearer the platform sits to
+                       // the axis the less the camera's weight pulls on the clamp. Room is left
+                       // under the platform for the 1/4" screw's head beside the shaft
 plat_t     = 4;
 plat_hw    = 22;       // platform half depth
 cr_x       = xa - spacer_t;                        // outer face of cheek
+// The cradle grips the tilt shaft with a pinch clamp, not a set screw: a
+// slit from the bore to the top of the hub, closed by an M3 bolt across it.
+// A set screw bearing on a round rod slips under the camera's weight, and
+// the thin wall beside its nut pocket was what cracked when it was tightened.
+cr_hub_d   = 26;       // hub round the shaft: 10.5 mm of wall
+cr_shaft_fit = 0.1;    // the bore is nearly rod size: the clamp only has to close a hair.
+                       // A printed horizontal hole comes out a touch small; ream with a 5 mm drill if the rod will not enter
+slit_w     = 1.2;
+pinch_z    = shaft_d / 2 + 4.5;                    // the bolt crosses the slit this far above the axis
+pinch_bolt = 25;       // M3 x 25 through about 22 mm of hub, nut on the -Y side
 
 // ── Helpers ─────────────────────────────────────────────────────
 // Cut for an M3 set screw with a captive nut. Shaft along Z through the
@@ -213,16 +226,25 @@ module yoke()
 
 module cheek()            // +X side, coordinates relative to the tilt axis
 {
+    half_w = sqrt(pow(cr_hub_d / 2, 2) - pow(pinch_z, 2));   // hub half-width where the bolt crosses
     difference()
     {
         translate([cr_x - cheek_t, 0, 0]) rotate([90, 0, 90]) linear_extrude(cheek_t) hull()
         {
-            circle(d = hub_d);
+            circle(d = cr_hub_d);
             translate([-plat_hw, -plat_drop - plat_t]) square([2 * plat_hw, plat_t]);
         }
         translate([cr_x - cheek_t - 1, 0, 0]) rotate([0, 90, 0])
-            cylinder(d = shaft_d + shaft_fit, h = cheek_t + 2);
-        translate([cr_x - cheek_t / 2, 0, 0]) rotate([0, -90, 0]) setscrew_cut(open = 10);
+            cylinder(d = shaft_d + cr_shaft_fit, h = cheek_t + 2);
+        // slit from the bore up through the top of the hub
+        translate([cr_x - cheek_t - 1, -slit_w / 2, 0]) cube([cheek_t + 2, slit_w, cr_hub_d]);
+        // pinch bolt across the slit: clearance hole, nut pocket on -Y, head pocket on +Y
+        translate([cr_x - cheek_t / 2, 0, pinch_z]) rotate([90, 0, 0])
+        {
+            cylinder(d = m3_clear, h = 2 * half_w + 2, center = true);
+            translate([0, 0, half_w - nut_t - 1.5]) cylinder(d = nut_af / cos(30), h = nut_t + 5, $fn = 6);
+            translate([0, 0, -half_w - 3.5]) cylinder(d = 6.2, h = 5);
+        }
     }
 }
 

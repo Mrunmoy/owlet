@@ -12,7 +12,7 @@ A belt-driven pan-tilt head for two pancake NEMA 17 motors. Each axis is a 20T m
 | `stl/base_top.stl` | Base deck and walls; holds the pan motor underneath (exported deck-down for printing) |
 | `stl/base_bottom.stl` | Bottom plate with the lower pan bearing and hold-down holes |
 | `stl/yoke.stl` | Turntable and two arms; carries the tilt motor and both tilt bearings |
-| `stl/cradle.stl` | Camera platform on the tilt shaft (strap slots and a 1/4" screw hole) |
+| `stl/cradle.stl` | Camera platform on the tilt shaft (strap slots and a 1/4" screw hole). Grips the shaft with a pinch clamp: one M3 x 25 bolt and nut across the slit in each hub. The earlier set-screw version slipped under the camera's weight and cracked when tightened |
 | `stl/small_parts.stl` | One shaft collar and six 1.5 mm spacers |
 | `stl/bushings/` | Sleeves that adapt an 8 mm pulley bore to a 5 mm shaft: a graded set (8.0 to 8.5 mm, rim notches count the size) and one file per size |
 

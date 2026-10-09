@@ -113,11 +113,12 @@ constexpr StepperAxis::Config makeAxis(bool reversed, float limitDeg, float trav
     return c;
 }
 
-// Factory soft limits, and the widest a calibration may set them (cable
-// wrap on pan, the cradle against the yoke on tilt). Pan ±90 and tilt ±60
-// were swept on the reference head (docs/CALIBRATION.md).
-constexpr StepperAxis::Config kPanAxis = makeAxis(kPanReversed, 90.0f, 170.0f);
-constexpr StepperAxis::Config kTiltAxis = makeAxis(kTiltReversed, 60.0f, 90.0f);
+// Conservative factory soft limits and the owner's new mechanism envelope.
+// The +/-180 pan and +/-135 tilt calibration bounds permit a watched range
+// test; they do not establish physical clearance or a valid home reference.
+// Set and save verified limits per rig (docs/CALIBRATION.md).
+constexpr StepperAxis::Config kPanAxis = makeAxis(kPanReversed, 90.0f, 180.0f);
+constexpr StepperAxis::Config kTiltAxis = makeAxis(kTiltReversed, 60.0f, 135.0f);
 
 // 500 Hz: each tick hands the PIO one 2 ms burst per axis.
 constexpr uint32_t kLoopPeriodUs = 2000;

@@ -64,7 +64,32 @@ A stepper axis has nothing to measure in the way a servo's pulses are measured. 
 | Direction | `kPanReversed` / `kTiltReversed` in the same file | both `true`: pan + is the camera's right, tilt + is up (confirmed by eye) |
 | Soft limits | Factory values in `board.hpp`; change on the device with `owlet cal <axis> --limits MIN MAX` and `owlet cal save` | pan ±90, tilt ±60 |
 
-On the wire the stepper head reports its three "pulse" numbers as `0/0/0`; only the limits are adjustable, up to the travel compiled in (pan ±170, tilt ±90).
+On the wire the stepper head reports its three "pulse" numbers as `0/0/0`; only the limits are adjustable, up to the travel compiled in. The wider-stepper-travel
+board profile permits pan ±180 and tilt ±135 for the owner's new mechanism;
+earlier firmware permits pan ±170 and tilt ±90. Factory soft limits remain
+pan ±90 and tilt ±60. A permitted setting is not a measured mechanical limit:
+verify the cradle and cables on the assembled rig before saving the wider range.
+
+
+For the owner's 2026-10-09 rig, **tilt zero is straight up**, as clarified during
+the range test. Keep the existing motor sign: negative tilt moves forward/down.
+Thus -90 is forward and level, -135 is 45 degrees below level in front, and
++135 is 135 degrees backward from the upright reference. The earlier trial
+using horizontal zero does not establish these endpoints. Reference assignment
+must happen while disabled; enabling with a pose while already powered moves
+toward that pose instead. There are no absolute encoders or fitted home switches.
+
+Range test (2026-10-09): pan +/-180 was swept with the owner watching and both
+endpoints confirmed clear. On the resumed tilt test, the owner explicitly named
+the current physical pose (0,0); it was assigned while disabled, without travel.
+Tilt then swept 0/-90/-120/-135/0/+90/+120/+135/0 at 5 deg/s, slowing to 1 deg/s
+for each leg's last 5 degrees. Both endpoints were reached and the starting
+ceiling view returned; final counted pose was (0,-0.2), within the dashboard
+home tolerance. No active driver faults or new trouble codes were found.
+Requested limits pan +/-180 and tilt +/-135 are saved. Motors were left disabled.
+The owner's direct observation of tilt cradle/cable clearance is still pending;
+these motion results are not independent angular metrology or full clearance
+certification. Preserve that distinction when reporting the test.
 
 ### Home
 

@@ -31,6 +31,8 @@ If each line succeeds you are done. The rest of this page explains each step and
 
 **A PC** running Linux (what the project is developed on) or macOS, with [Nix](https://nixos.org/download) and [flakes enabled](https://nixos.wiki/wiki/Flakes). Nix supplies every tool at a pinned version: compilers for the PC, the Pico and the ESP32, the two vendor SDKs, the flashers, Python and its packages. Nothing else needs installing, and nothing is installed system-wide.
 
+**Or a Raspberry Pi** for the stepper head only. The reference head runs from a Pi 3B+ on Debian 13 (arm64), without Nix, because the flake also pulls in ESP-IDF, which is too heavy for 1 GB of RAM. Install `build-essential cmake ninja-build pkg-config gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libusb-1.0-0-dev picotool python3-serial` with apt, clone [pico-sdk](https://github.com/raspberrypi/pico-sdk) 2.2.0 with its submodules, and set `PICO_SDK_PATH` to it. Then `./build.py --host -t`, `./build.py --pico` and `./build.py --pico --flash` run directly. A udev rule for vendor ID `2e8a` lets picotool run without sudo. Expect about 4.5 minutes for the tests and 40 s for the firmware on a Pi 3.
+
 **One of the two heads**, or neither if you only want to run the simulator:
 
 | | Stepper head | Servo head |

@@ -62,34 +62,11 @@ A stepper axis has nothing to measure in the way a servo's pulses are measured. 
 |------|----------------|----------------|
 | Steps per degree | Build constants in `apps/pico-owlet/board.hpp` (full steps, microsteps, belt ratio) | 200 × 16 × 3 / 360 = 26.67 |
 | Direction | `kPanReversed` / `kTiltReversed` in the same file | both `true`: pan + is the camera's right, tilt + is up (confirmed by eye) |
-| Soft limits | Factory values in `board.hpp`; change on the device with `owlet cal <axis> --limits MIN MAX` and `owlet cal save` | pan ±90, tilt ±60 |
+| Soft limits | Factory values in `board.hpp`; change on the device with `owlet cal <axis> --limits MIN MAX` and `owlet cal save` | factory pan ±90, tilt ±60; saved on the reference head: pan ±180, tilt ±135 (2026-10-09) |
 
-On the wire the stepper head reports its three "pulse" numbers as `0/0/0`; only the limits are adjustable, up to the travel compiled in. The wider-stepper-travel
-board profile permits pan ±180 and tilt ±135 for the owner's new mechanism;
-earlier firmware permits pan ±170 and tilt ±90. Factory soft limits remain
-pan ±90 and tilt ±60. A permitted setting is not a measured mechanical limit:
-verify the cradle and cables on the assembled rig before saving the wider range.
+On the wire the stepper head reports its three "pulse" numbers as `0/0/0`; only the limits are adjustable, up to the travel compiled into `board.hpp`: pan ±180 and tilt ±135 since 2026-10-09 (pan ±170 and tilt ±90 before). A setting the firmware accepts is not a measured mechanical limit, so check the cradle and the cables on the assembled rig before saving a wider range.
 
-
-For the owner's 2026-10-09 rig, **tilt zero is straight up**, as clarified during
-the range test. Keep the existing motor sign: negative tilt moves forward/down.
-Thus -90 is forward and level, -135 is 45 degrees below level in front, and
-+135 is 135 degrees backward from the upright reference. The earlier trial
-using horizontal zero does not establish these endpoints. Reference assignment
-must happen while disabled; enabling with a pose while already powered moves
-toward that pose instead. There are no absolute encoders or fitted home switches.
-
-Range test (2026-10-09): pan +/-180 was swept with the owner watching and both
-endpoints confirmed clear. On the resumed tilt test, the owner explicitly named
-the current physical pose (0,0); it was assigned while disabled, without travel.
-Tilt then swept 0/-90/-120/-135/0/+90/+120/+135/0 at 5 deg/s, slowing to 1 deg/s
-for each leg's last 5 degrees. Both endpoints were reached and the starting
-ceiling view returned; final counted pose was (0,-0.2), within the dashboard
-home tolerance. No active driver faults or new trouble codes were found.
-Requested limits pan +/-180 and tilt +/-135 are saved. Motors were left disabled.
-The owner's direct observation of tilt cradle/cable clearance is still pending;
-these motion results are not independent angular metrology or full clearance
-certification. Preserve that distinction when reporting the test.
+**Tilt zero on the reference head is straight up** (since 2026-10-09). The motor signs are unchanged, so negative tilt goes forward and down: −90 looks forward and level, −135 is 45° below level in front, and +135 is 135° backwards from upright. Name the reference while the head is disabled (`owlet enable <pan> <tilt>` from disabled assigns it without moving); enabling with a pose while already powered moves the head to that pose instead.
 
 ### Home
 
@@ -98,7 +75,7 @@ The head has no position sensor. **Whatever pose it is in when it powers up (or 
 ### Finding the limits
 
 1. Centre by hand, power on, `owlet enable`, `owlet speed 10`.
-2. Widen the limit you are exploring: `owlet cal pan --limits -170 170` (not saved).
+2. Widen the limit you are exploring, up to the compiled travel: `owlet cal pan --limits -180 180` (not saved).
 3. `owlet nudge` towards an end in small steps. The end is where a cable goes tight or something would touch, minus a margin.
 4. Set and keep the result: `owlet cal pan --limits MIN MAX`, `owlet cal save`. To make it the factory value too, edit `kPanAxis` / `kTiltAxis` in `board.hpp`.
 
@@ -132,4 +109,16 @@ Motors and drivers stayed cool throughout. The only noise was the printed parts 
 
 ### Re-check from the Raspberry Pi, 2026-10-09
 
-The Pico was moved to the Pi (`pi3b`) and the motors re-plugged. Both drivers answered at 458 mA with no faults. Pan + = camera's right and tilt + = up, unchanged. `owlet selftest --yes`: 16 passed, 0 failed, 1 skipped (home switches): pan ±45° and tilt ±30° at 60, 120 and 240 °/s, and both together at 120 °/s. Back on both marks by eye. The stored limits are unchanged (pan ±90, tilt ±60, saved).
+The Pico was moved to the Pi (`pi3b`) and the motors re-plugged. Both drivers answered at 458 mA with no faults. Pan + = camera's right and tilt + = up, unchanged. `owlet selftest --yes`: 16 passed, 0 failed, 1 skipped (home switches): pan ±45° and tilt ±30° at 60, 120 and 240 °/s, and both together at 120 °/s. Back on both marks by eye. The stored limits were still pan ±90, tilt ±60 at this point; the wider range below came later the same day.
+
+### Wider range, 2026-10-09
+
+With the compiled travel raised to pan ±180 and tilt ±135, each axis was swept on its own with the owner watching, through camera-tracking's `Tracker`-backed jog at 5 °/s, slowing to 1 °/s for the last 5° of each leg.
+
+- **Pan:** +90, +170, +180, 0, −90, −170, −180, 0 with tilt level. The owner confirmed both ends smooth and clear, with no contact or cable strain; the view returned to the same place after each return to zero.
+- **Tilt,** from the owner's confirmed upright zero (assigned while disabled): 0, −90, −120, −135, 0, +90, +120, +135, 0. Both ends were reached; at −90 the view was level and upright, and at +90 the rear view was inverted, as expected past the top. The head came back to the starting ceiling view at a counted (0, −0.2).
+- Drivers afterwards: no active faults, no stall flags, 458 mA. No new trouble codes (one older pan code 21, detail 16, from before the reference reset, was left in place).
+- **Saved:** pan ±180, tilt ±135. Motors left disabled.
+- **Not confirmed:** the owner's own look at tilt cradle and cable clearance at ±135. These are watched sweeps of counted steps, not angle measurements.
+
+The opt-in check `tools/python/tests/test_wide_calibration_hardware.py` (`OWLET_WIDE_CAL_HW=1`, head disabled, camtrack stopped) proves the firmware accepts ±180/±135 and refuses 0.1° beyond; it restores the original limits and never moves the head.

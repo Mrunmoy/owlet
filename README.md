@@ -152,7 +152,8 @@ There are two reference heads. Both speak the same protocol and run the same cor
 | Position | absolute, ±90° | relative: where it is at `enable` is taken as the pose you give |
 | Smallest step | about 0.44° | 0.0375° |
 | Top speed | 500 °/s | 240 °/s (ran clean at 360) |
-| Status | last verified on hardware with firmware 0.3.0; **untested on 0.5.0** | verified on hardware (firmware 0.4.0, and 0.5.0 with the motors disconnected): pan ±90°, tilt ±60°, up to 240 °/s |
+| Travel | ±90° | set per rig, up to pan ±180° and tilt ±135° (factory ±90° / ±60°) |
+| Status | last verified on hardware with firmware 0.3.0; **untested on 0.5.0** | verified on hardware with firmware 0.5.0: self-test up to 240 °/s, pan ±180° and tilt ±135° swept slowly by eye |
 
 ### Servo head: bill of materials
 
@@ -787,7 +788,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 
 ## Project status and roadmap
 
-**v0.5.0 firmware, v0.4.0 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. There are two reference heads. On the servo head (ESP32-S3), motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` were verified with firmware 0.3.0; 0.4.0 builds for it but has not been re-run on that hardware. On the stepper head (Raspberry Pi Pico), motion, directions, ranges, speed and acceleration limits, velocity mode, the watchdog and calibration storage were verified with 0.4.0. Firmware 0.5.0 makes the head report changes as events; on the Pico its arrival, watchdog and event-counter paths were checked with the motors disconnected, and the driver reports (`ONLINE`, `FAULT`) have host tests only so far.
+**v0.5.0 firmware, v0.4.0 Python client, alpha.** The firmware, protocol, PC client, tracking support, on-device calibration and simulator are complete and tested. There are two reference heads. On the servo head (ESP32-S3), motion, directions, ranges, velocity mode, the watchdog, clock sync and the `Tracker` were verified with firmware 0.3.0; 0.4.0 builds for it but has not been re-run on that hardware. On the stepper head (Raspberry Pi Pico), motion, directions, ranges, speed and acceleration limits, velocity mode, the watchdog and calibration storage were verified with 0.4.0. Firmware 0.5.0 makes the head report changes as events; on the Pico its arrival, watchdog and event-counter paths were checked with the motors disconnected, and the driver reports (`ONLINE`, `FAULT`) have host tests only so far. With the motors connected, 0.5.0 passed `owlet selftest` on 2026-10-09, and the same day the reference head was swept slowly through pan ±180° and tilt ±135°, which are now its saved limits ([`docs/CALIBRATION.md`](docs/CALIBRATION.md)).
 
 - [x] Firmware: USB protocol, speed-limited motion, boot-limp safety
 - [x] Python library and CLI with port auto-detection
@@ -802,6 +803,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 - [x] First motion of the stepper head: both axes swept and back on their marks
 - [x] Stepper head directions confirmed (pan + = camera's right, tilt + = up)
 - [x] Stepper head on 12 V: speed and acceleration limits measured and set
+- [x] Stepper head's wider travel (pan ±180°, tilt ±135°) swept and saved
 - [ ] Re-run the servo head on firmware 0.5.0. Until then it is untested on real hardware
 - [x] Stepper current set over the TMC2209 UART instead of the potentiometer; driver load and faults readable (`owlet diag`)
 - [ ] Stall detection: characterise the load value against speed and pick thresholds

@@ -6,7 +6,7 @@
 
 Today the firmware asks. Every 2 ms the protocol looks at the head to see whether it has arrived, whether the watchdog fired, whether it is time for a position report. Driver status is fetched on a timer and sits in a cache until someone requests `$DIAG`. The PC has to poll for anything that is not one of three hard-wired messages.
 
-That worked for two servos. It does not scale to what is coming: limit switches, homing, stall detection, driver faults, perhaps a second transport. Each would add another thing for every layer to ask about, and another place to forget to.
+That worked while the head had little to report. It does not scale to what is coming: limit switches, homing, stall detection, driver faults, perhaps a second transport. Each would add another thing for every layer to ask about, and another place to forget to.
 
 The aim is the opposite arrangement. Whatever notices a change announces it once. Whoever cares has connected to it. Nothing above the hardware edge asks "has anything happened?", on the device or on the PC.
 

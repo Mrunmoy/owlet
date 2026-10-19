@@ -5,6 +5,8 @@ pico-sdk implementations of the HAL interfaces declared in `drivers/owlet_hal/`,
 - `PicoClock`: `IClock` on the 64-bit microsecond timer.
 - `PicoDelay`: `IDelayProvider` on `sleep_us` / `sleep_ms`.
 - `PicoUsbSerial`: `ISerialPort` on the native USB port as CDC-ACM (`/dev/ttyACM*` / `COMx`), through the SDK's `stdio_usb` driver with newline translation off. Nothing else writes to the port.
+- `PicoDigitalInput`: `IDigitalInput` on a GPIO with an edge interrupt, for the limit switches.
+- `PicoInterruptLock`: `IInterruptLock` that masks interrupts around the event queue.
 - `PicoDigitalOutput`: `IDigitalOutput` on a GPIO, with the polarity (active high or low) set here. The pin is driven to its off level before it becomes an output.
 - `PicoStepProgram` + `PicoStepGenerator`: `IStepGenerator` on PIO. One ten-instruction program per PIO block, one state machine per motor.
 - `PicoFlashCalibrationStore`: `ICalibrationStore` in the last sector of the on-board flash.

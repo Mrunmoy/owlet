@@ -7,6 +7,8 @@ ESP-IDF implementations of the HAL interfaces declared in `drivers/owlet_hal/`. 
 - `Esp32I2CBus`: `II2CBus` on the ESP-IDF 5.x `i2c_master` driver (GP1 = SDA, GP2 = SCL by default).
 - `Esp32Delay`: `IDelayProvider` using `esp_rom_delay_us` / `vTaskDelay`.
 - `Esp32UsbSerial`: `ISerialPort` on the USB-Serial-JTAG peripheral. The PC sees it as `/dev/ttyACM*` / `COMx`.
+- `Esp32Clock`: `IClock` on the ESP-IDF microsecond timer.
+- `Esp32NvsCalibrationStore`: `ICalibrationStore` in NVS flash.
 
 ## Why the directory is prefixed `owlet_`
 

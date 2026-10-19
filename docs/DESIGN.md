@@ -1,13 +1,13 @@
 # owlet — Design Document
 
-*Last updated: 2026-10-05*
+*Last updated: 2026-10-19*
 
 ## 1. Goals
 
 - A two-axis **pan-tilt head** that any PC can drive over a single USB cable.
 - A **documented, human-readable wire protocol** with integrity checking, so it can be scripted from any language or typed by hand.
 - The PC can **command a pose** and **know the current pose** at any time, either by polling or by streaming.
-- Reuse the proven pieces from the [clops](../../clops) one-eyed robot: the HAL interfaces, PCA9685 driver, simulators and build system.
+- Reuse the proven pieces from clops, the author's one-eyed robot: the HAL interfaces, PCA9685 driver, simulators and build system.
 - Keep **all behaviour host-testable**. On clops the real behaviour lived in an ESP-only `main.cpp` with no tests; owlet keeps `main.cpp` as pure wiring.
 
 ## 2. Non-goals
@@ -52,7 +52,7 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 | Component | Details |
 |-----------|---------|
 | MCU | Raspberry Pi Pico or pin-compatible RP2040 board (native USB, CDC-ACM through the pico-sdk) |
-| Drivers | 2× TMC2209 StepStick in standalone step/dir mode, 1/16 microstepping, current set by potentiometer |
+| Drivers | 2× TMC2209 StepStick, step/dir for motion, 1/16 microstepping. Current and microsteps are set over each driver's UART (§5.7); without the link a driver runs standalone from the MS pins and its potentiometer |
 | Actuators | 2× NEMA 17 pancake steppers (200 steps/rev), each through a 20T:60T GT2 belt (3:1) |
 | Resolution | 200 × 16 × 3 = 9600 microsteps per output revolution: 0.0375° per step |
 | Power | Pico from USB; 12 V to the drivers' `VM` only |
@@ -67,10 +67,10 @@ The ROM bootloader still prints a short banner on USB at reset. The protocol fra
 | `GP0` + `GP1` | `PDN/UART` on the tilt driver | as above; a private line per driver, so no addressing is needed |
 | `GP25` | the LED on the board | heartbeat: one short flash a second while the control loop runs |
 | `GP22` | `3V3` → resistor → LED → `GP22` | the pin sinks the LED (low = lit) while the head is moving |
-
-The tilt pair is deliberately not `STEP`, `DIR` in pin order: that is how the reference head was wired, and the firmware follows the hardware.
 | `3V3(OUT)` | `VIO` on both drivers | logic supply |
 | USB | PC | **protocol** only (no console anywhere) |
+
+The tilt pair is deliberately not `STEP`, `DIR` in pin order: that is how the reference head was wired, and the firmware follows the hardware.
 
 `GP10`/`GP11` (pan) and `GP14`/`GP15` (tilt) are set aside for the limit switches, two per axis. The drawing and the driver pinout are in [`wiring/pico-tmc2209/`](wiring/pico-tmc2209/README.md); the printable mechanism is in [`../mechanical/stepper-head/`](../mechanical/stepper-head/). The pin map and the motion limits are in `apps/pico-owlet/board.hpp`, the one file that describes this head.
 
@@ -206,7 +206,7 @@ class IProtocol {
 
 1. Create a component (e.g. `firmware/common/my_proto/`) that depends on `owlet_core` only.
 2. Implement `IProtocol`. Take `IPanTilt&` and `IByteSink&` in the constructor.
-3. In `apps/esp32-owlet/main/main.cpp`, construct it and add it to the `ProtocolMux` (or pass it to `ControlLoop` directly if it should be the only protocol).
+3. In `apps/esp32-owlet/main/main.cpp` or `apps/pico-owlet/main.cpp`, construct it and add it to the `ProtocolMux` (or pass it to `ControlLoop` directly if it should be the only protocol).
 4. Unit-test it on the host with a real `PanTilt` over `FakeServoChannel`, or with your own `IPanTilt` fake. See `tests/test_text_protocol.cpp` for the pattern.
 
 ### 4.5 Efficiency
@@ -227,7 +227,7 @@ class IProtocol {
 
 **A new motor type** is a class implementing `hal::IAxis` and `hal::IAxisCalibration`, tested on the host against fakes of whatever hardware interface it needs. Construct two in `main.cpp` and pass them to `PanTilt` and `Calibrator`. `tests/mocks/FakeAxis.hpp` is the smallest possible example.
 
-**A new board** is a `platform/owlet_<board>/` folder implementing `IClock`, `ISerialPort` and `ICalibrationStore`, plus the motor-side interface its head uses (`II2CBus` for the PCA9685, or `IStepGenerator` and `IDigitalOutput` for steppers), and an app whose `main.cpp` only constructs and injects. The Pico port added about 400 lines of platform code and changed nothing in the protocol or the client.
+**A new board** is a `platform/owlet_<board>/` folder implementing `IClock`, `ISerialPort` and `ICalibrationStore`, plus the motor-side interface its head uses (`II2CBus` for the PCA9685, or `IStepGenerator` and `IDigitalOutput` for steppers), and an app whose `main.cpp` only constructs and injects. The Pico platform is about 525 lines of `.cpp` (885 with headers) and changed nothing in the protocol or the client. For the full stepper feature set a board also implements `IHalfDuplexLink` (the driver UART), `IDigitalInput` (limit switches) and `IInterruptLock`.
 
 **A new transport** (UART, TCP, BLE) is a class implementing `IByteSource` and `IByteSink`. Give its source half to `ControlLoop` and its sink half to the protocol. To serve two links at once, run a loop per link or merge them behind one `ISerialPort`.
 
@@ -237,7 +237,7 @@ What the platform must get right for the rest to behave: a monotonic millisecond
 
 This is owlet's built-in protocol. It is designed for **closed-loop control from a PC**, such as camera-based object tracking: commands replace the current goal immediately instead of queuing, velocity mode with a safety watchdog maps directly onto a tracking controller's output, and timestamped position streaming lets the PC know where the head pointed when each camera frame was taken. Other protocols can be added as plug-ins (§4.4).
 
-Version 2 (owlet 0.2.0) added `VEL`, `WATCHDOG`, `CLOCK`, `$TIMEOUT`, and the timestamp field on `$POS`. Version 3 (owlet 0.3.0) added `CAPS` and `CAL` (§5.6). Clients must check the version in `$PONG`.
+Version 2 (owlet 0.2.0) added `VEL`, `WATCHDOG`, `CLOCK`, `$TIMEOUT`, and the timestamp field on `$POS`. Version 3 (owlet 0.3.0) added `CAPS` and `CAL` (§5.6). Later firmware added commands without changing the protocol version: 0.4.0 added `DIAG` (§5.7); 0.5.0 added `$EVT`, `EVENTS`, `STAT` (§5.8), `DTC` (§5.9) and `SEEK` (§6.6). Clients must check the version in `$PONG`, and treat `$ERR,UNK` as "this firmware does not have that command".
 
 ### 5.1 Framing
 
@@ -258,33 +258,38 @@ Example: `$MOVE,30,-15*3B\r\n`, where `0x3B` is the XOR of `MOVE,30,-15`.
 
 Angles and speeds are decimal with an optional sign and up to 2 fractional digits: `30`, `-15.5`, `+0.25`. Exponents, `nan`, `inf` and empty strings are rejected. The device reports angles with exactly one decimal (`-15.5`, `0.0`).
 
-The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrated center. Viewed from behind the head, "right" is the head's right. Mounting differences are handled by calibration (an inverted axis swaps min/max pulse), never by the protocol.
+The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrated center (on the stepper head, the pose it was in at enable; the reference rig takes tilt zero as straight up, so there + tilts backwards over the top). Viewed from behind the head, "right" is the head's right. Mounting differences are handled by calibration (an inverted axis swaps min/max pulse), never by the protocol.
 
 ### 5.3 Requests (PC → device)
 
 | Request                     | Success reply                         | Notes |
 |-----------------------------|---------------------------------------|-------|
 | `$PING`                     | `$PONG,<proto>,<fw>`                  | e.g. `$PONG,3,0.5.0` |
-| `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both servos at their last known position (initially 0,0). No-op if already enabled. |
+| `$ENABLE`                   | `$ACK,ENABLE`                         | Energise both motors at their last known position (initially 0,0). No-op if already enabled. |
 | `$ENABLE,<pan>,<tilt>`      | `$ACK,ENABLE`                         | Energise at the given pose (snap). If already enabled, this is a slewed move and earns an `$ARRIVED`. |
-| `$DISABLE`                  | `$ACK,DISABLE`                        | PWM off; servos go limp. Target is kept. |
+| `$DISABLE`                  | `$ACK,DISABLE`                        | Motors off (servo PWM off, stepper drivers disabled); the head goes limp. Target is kept. |
 | `$MOVE,<pan>,<tilt>`        | `$ACK,MOVE`                           | Absolute move at the current speed. Out-of-limit → `RNG`. |
 | `$NUDGE,<dpan>,<dtilt>`     | `$ACK,NUDGE`                          | Relative to the current **target**, clamped to limits (for jogging). |
 | `$HOME`                     | `$ACK,HOME`                           | `MOVE,0,0`. |
 | `$STOP`                     | `$ACK,STOP`                           | Target := current position. |
 | `$SPEED`                    | `$SPEED,<deg/s>`                      | Query slew speed. |
-| `$SPEED,<deg/s>`            | `$ACK,SPEED`                          | 1–500 deg/s, both axes. Default 90. |
+| `$SPEED,<deg/s>`            | `$ACK,SPEED`                          | Both axes, within the range `$CAPS` reports (servo head 1–500, stepper head 1–240). Default 90. |
 | `$POS`                      | `$POS,<pan>,<tilt>,<tpan>,<ttilt>,<st>,<ms>` | See §5.5. |
 | `$STREAM,<hz>`              | `$ACK,STREAM`                         | 0 = off, 1–50 Hz periodic `$POS`. |
 | `$LIMITS`                   | `$LIMITS,<pmin>,<pmax>,<tmin>,<tmax>` | Soft limits in degrees. |
-| `$VEL,<pan°/s>,<tilt°/s>`   | `$ACK,VEL`                            | Velocity mode: turn continuously at these signed rates (each −500…500). The head stops at soft limits without error. Replaces any position move (no `$ARRIVED`); any `MOVE`/`NUDGE`/`HOME`/`STOP`/`DISABLE` ends it. Guarded by the watchdog. |
+| `$VEL,<pan°/s>,<tilt°/s>`   | `$ACK,VEL`                            | Velocity mode: turn continuously at these signed rates (each within ± the `$CAPS` velocity maximum: 500 on the servo head, 240 on the stepper head). The head stops at soft limits without error. Replaces any position move (no `$ARRIVED`); any `MOVE`/`NUDGE`/`HOME`/`STOP`/`DISABLE` ends it. Guarded by the watchdog. |
 | `$WATCHDOG`                 | `$WATCHDOG,<ms>`                      | Query the velocity watchdog timeout. |
 | `$WATCHDOG,<ms>`            | `$ACK,WATCHDOG`                       | 0 = off, otherwise 50–5000 ms. Default 500. |
 | `$CLOCK`                    | `$CLOCK,<ms>`                         | Device uptime in ms (wraps after ~49.7 days), for clock sync. |
 | `$CAPS`                     | `$CAPS,<spdmin>,<spdmax>,<velmax>,<wdmin>,<wdmax>,<hzmax>` | Motion capabilities (§5.6). |
 | `$CAL,…`                    | see §5.6                              | Read, set, save or reset the per-axis calibration. |
+| `$DIAG,<AXIS>`              | `$DIAG,…`                             | Motor driver report (§5.7). |
+| `$EVENTS,<0\|1>`            | `$ACK,EVENTS`                         | `$EVT` lines off or on (§5.8). |
+| `$STAT`                     | `$STAT,…`                             | Event and control-loop health counters (§5.8). |
+| `$DTC`, `$DTC,<i>`, `$DTC,CLEAR` | `$DTC,…` / `$ACK,DTC`            | Trouble codes (§5.9). |
+| `$SEEK`                     | `$ACK,SEEK`                           | Home from the limit switches (§6.6). |
 
-`MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` require the servos to be enabled; otherwise the reply is `$NAK,<CMD>,DIS`. This means a PC can't make the head snap by queuing a move while it's limp. The only way to choose the energise pose is the explicit `ENABLE,<pan>,<tilt>`.
+`MOVE`, `NUDGE`, `HOME`, `STOP` and `VEL` require the head to be enabled; otherwise the reply is `$NAK,<CMD>,DIS`. This means a PC can't make the head snap by queuing a move while it's limp. The only way to choose the energise pose is the explicit `ENABLE,<pan>,<tilt>`.
 
 **Velocity watchdog.** In velocity mode the PC must refresh `VEL` at least once per watchdog period. If it doesn't, because the tracking program crashed, hung or lost the cable, the device stops both axes where they are (staying enabled) and sends `$TIMEOUT,VEL` once. Position moves aren't guarded: they end by themselves.
 
@@ -294,15 +299,19 @@ The coordinate frame is: **pan +** = right, **tilt +** = up, **0,0** = calibrate
 |--------------------|---------|
 | `$NAK,<CMD>,FMT`   | Wrong number of fields or a malformed number |
 | `$NAK,<CMD>,RNG`   | Value outside the allowed range |
-| `$NAK,<CMD>,DIS`   | Servos disabled; send `ENABLE` first |
-| `$NAK,<CMD>,BUS`   | PCA9685 write failed (I2C error) |
+| `$NAK,<CMD>,DIS`   | Motors disabled; send `ENABLE` first |
+| `$NAK,<CMD>,BUS`   | The motor hardware did not respond (on the servo head, a PCA9685 I2C write failed) |
+| `$NAK,<CMD>,LOST`  | The head no longer trusts its position (a limit switch tripped, or homing failed): `SEEK`, or `DISABLE` then `ENABLE,<pan>,<tilt>` (§6.6) |
+| `$NAK,<CMD>,BSY`   | Homing is running; `STOP` or `DISABLE` aborts it |
+| `$NAK,<CMD>,UNS`   | Not supported by this head (e.g. `SEEK` with no switches fitted) |
 | `$NAK,CAL,ENA`     | Pulse calibration can only change while the servos are disabled |
+| `$NAK,CAL,MOV`     | `CAL,SAVE` refused while the head is moving (a flash write pauses the loop) |
 | `$NAK,CAL,STO`     | Saving or erasing the calibration in flash failed |
 | `$ERR,CHK`         | Checksum mismatch: the frame was discarded unread |
 | `$ERR,LEN`         | Frame exceeded 82 bytes |
 | `$ERR,SYN`         | Frame is not `$...*HH` |
 | `$ERR,UNK`         | Valid frame, unknown command name |
-| `$ERR,BUS`         | Unsolicited: a slew step failed to reach the PCA9685. Sent once per fault; the step is retried every tick |
+| `$ERR,BUS`         | Unsolicited: a motion step failed to reach the motor hardware (the PCA9685 on the servo head). Sent once per fault; the step is retried every tick |
 
 Frame-level problems use `$ERR` because the command name can't be trusted. Every well-formed request gets exactly one reply, in order, so a client can match replies to requests without sequence numbers.
 
@@ -327,6 +336,7 @@ Unsolicited messages (device → PC):
 | `$ARRIVED,<pan>,<tilt>` | Exactly once per accepted `MOVE`/`NUDGE`/`HOME`, even a zero-length one, so clients can always wait on it. `STOP` and `DISABLE` cancel it. |
 | `$POS,...`              | At the `STREAM` rate |
 | `$ERR,BUS`              | When a slew write fails (see §5.4) |
+| `$EVT,<name>,<axis>,<arg>` | Anything else the head notices (§5.8); `$EVENTS,0` silences these |
 
 When streaming is on, a streamed `$POS` and the reply to a `$POS` request look the same; both are current, so either answers the query.
 
@@ -337,7 +347,7 @@ Clients must tolerate unsolicited lines interleaved with replies. A reply is ide
 A client shouldn't have to probe the head to find out what it can do. It asks:
 
 ```
-$CAPS                → $CAPS,1.0,500.0,500.0,50,5000,50
+$CAPS                → $CAPS,1.0,500.0,500.0,50,5000,50     (servo head; the stepper head reports 1.0,240.0,240.0,…)
                         slew speed min/max (°/s), velocity-mode max (°/s),
                         watchdog min/max (ms; 0 = off is also allowed), max stream rate (Hz)
 $LIMITS              → $LIMITS,<pmin>,<pmax>,<tmin>,<tmax>        (soft limits, degrees)
@@ -359,7 +369,7 @@ At boot the device loads the saved calibration if there is a valid one (versione
 
 **Re-pulsing while disabled.** The horn doesn't move while limp, so when an axis's pulses change, its position estimate is re-derived from the last pulse it was actually sent. If that puts the horn outside the (possibly new) limits, a bare `ENABLE` is refused with `NAK,ENABLE,RNG`, because energising "where it is" would snap it to the limit. Use `ENABLE,<pan>,<tilt>` to choose the pose explicitly. The same applies when the horn's last pulse lies beyond the new pulse range: its angle is then *unknown* (until the next explicit pose), and `$POS` meanwhile shows the nearest representable angle (±90°), not a measurement. The record format lives in host-tested code (`CalibrationCodec`), so only the NVS read/write itself is platform-specific.
 
-**Other motor types.** The wire format and the stored record are motor-neutral: three "drive" numbers and two limits per axis. The rules above are the *servo's* (its drive numbers are pulse widths); each axis type validates its own. The stepper head reports its drive numbers as `0,0,0` and refuses anything else with `NAK,CAL,RNG`; only its limits are adjustable, within the travel compiled into the app (pan ±170°, tilt ±90°), and a limits change never needs the head disabled. Its `$CAPS` reports the stepper's own speed range (for example `$CAPS,1.0,120.0,120.0,50,5000,50`), which is why clients must read `$CAPS` instead of assuming 500 °/s. `$CAL,SAVE` on the Pico erases and rewrites a flash sector, which pauses the control loop for some tens of milliseconds, so save while the head is at rest.
+**Other motor types.** The wire format and the stored record are motor-neutral: three "drive" numbers and two limits per axis. The rules above are the *servo's* (its drive numbers are pulse widths); each axis type validates its own. The stepper head reports its drive numbers as `0,0,0` and refuses anything else with `NAK,CAL,RNG`; only its limits are adjustable, within the travel compiled into the app (pan ±180°, tilt ±135° since 2026-10-09), and a limits change never needs the head disabled. Its `$CAPS` reports the stepper's own speed range (`$CAPS,1.0,240.0,240.0,50,5000,50`), which is why clients must read `$CAPS` instead of assuming 500 °/s. `$CAL,SAVE` on the Pico erases and rewrites a flash sector, which pauses the control loop for some tens of milliseconds, so save while the head is at rest.
 
 ### 5.7 Driver diagnostics
 
@@ -380,7 +390,7 @@ $DIAG,TILT           → $DIAG,TILT,N,0,0,0,0
 
 **Where it comes from on the stepper head.** Each TMC2209's `PDN/UART` pin is on its own Pico UART (TX and RX joined at the pin). `Tmc2209` speaks the chip's datagrams (sync, address, register, CRC-8); `Tmc2209Monitor` gives it at most one exchange every 100 ms from the control loop, about 1 ms each. When a driver first answers, the monitor configures it: current from the registers instead of the potentiometer (458 mA run, about 250 mA hold), microsteps from the register instead of MS1/MS2, StealthChop on. If the chip restarts because its supply dipped, it is configured again. Until a driver answers, and whenever it stops, that axis simply runs standalone from the MS pins and the potentiometer, at the same 1/16, so the head never depends on the link.
 
-The values are read on a timer today. Turning changes in them into pushed events, so that neither the firmware nor the PC has to ask, is planned (see `docs/design/`).
+The values are read on a timer, and the monitor turns changes in them into events (`$EVT,ONLINE`, `OFFLINE`, `FAULT`; §5.8), so neither the firmware nor the PC has to ask.
 
 ### 5.8 Events
 
@@ -446,7 +456,7 @@ So moves ramp up, ramp down onto the target and land on it exactly; reaching a s
 
 **Pulse timing is not the CPU's job.** On the Pico each axis has a PIO state machine running a ten-instruction program at 5 MHz. A burst is two FIFO words (pulse spacing, and count with the direction bit); the state machine sets `DIR`, then emits the pulses with cycle-exact spacing. A USB interrupt, a flash write or a late loop iteration cannot move a pulse that is already queued. At most one burst waits behind the running one, so a new command takes effect within one or two 2 ms ticks.
 
-**Enable and position.** `engageAt(deg)` powers the driver and names the present shaft position `deg`; a stepper cannot snap to an angle. The count starts at zero at boot, so pointing the head forward and sending `ENABLE` makes that pose (0, 0). `ENABLE,<pan>,<tilt>` re-labels the present pose without motion. Both drivers share one enable pin through `SharedEnable`, which keeps the line asserted while either axis is engaged.
+**Enable and position.** `engageAt(deg)` powers the driver and names the present shaft position `deg`; a stepper cannot snap to an angle. The count starts at zero at boot, so whatever pose the head is in when `ENABLE` is sent becomes (0, 0); the reference rig is enabled with tilt pointing straight up. `ENABLE,<pan>,<tilt>` re-labels the present pose without motion. Both drivers share one enable pin through `SharedEnable`, which keeps the line asserted while either axis is engaged.
 
 **Proven on hardware (2026-10-05):** on 12 V both axes, separately and together, ran clean at 360 °/s and 1920 °/s² and returned to their marks. The app allows 240 °/s and 1440 °/s², about two thirds of that, and reports them through `$CAPS`. The point where steps are actually lost was not reached.
 
@@ -492,30 +502,30 @@ A head with no switches answers `NAK,SEEK,UNS`.
 - `owlet.protocol`: encode, decode and checksum (no I/O; unit-tested against `docs/protocol_vectors.txt`, the same file the C++ tests read).
 - `owlet.client.Owlet`: high-level API (`ping()`, `enable()`, `move()`, `velocity()`, `position()`, `stream()`, ...). It handshakes with `PING` (retrying through boot noise) and matches replies by name. Unsolicited lines (`ERR,BUS`, `POS` stream, `ARRIVED`, `TIMEOUT`) and late replies to fire-and-forget `send()`s go to `on_event` and are never mistaken for the current request's reply. `transport=` accepts any pyserial-like object (dependency injection for tests or other links).
 - `owlet.tracking`: the pieces of a tracking loop.
-  - `Tracker(head)`: background reader with a 50 Hz `$POS` stream, clock sync (repeated every 5 s to follow drift), `set_rates()` (sends `VEL` without waiting for each ACK, clamped to ±500 °/s), and `pose_at(host_time)` interpolation. The watchdog is mandatory (50–5000 ms). Failures are never silent: if the reader dies or the device reboots (a `$READY`, or its clock going backwards), `failed` is set, `last_error` says why, and `set_rates()` raises. `stop()` is best-effort and never raises.
+  - `Tracker(head)`: background reader with a 50 Hz `$POS` stream, clock sync (repeated every second to follow drift), `set_rates()` (sends `VEL` without waiting for each ACK, clamped to the head's `$CAPS` velocity maximum), and `pose_at(host_time)` interpolation. The watchdog is mandatory (50–5000 ms). Failures are never silent: if the reader dies or the device reboots (a `$READY`, or its clock going backwards), `failed` is set, `last_error` says why, and `set_rates()` raises. `stop()` is best-effort and never raises.
   - `PixelController`: turns a detection's pixel offset into pan/tilt rates using the camera's field of view, a gain, a deadband and a rate limit.
   - `examples/track_object.py`: a webcam + YOLO loop built on these. It is optional and needs `opencv-python` and `ultralytics`, which the library itself doesn't depend on.
 - `owlet` / `python -m owlet`: a CLI (`owlet move 30 -15 --wait`, `owlet pos`, `owlet watch`, `owlet shell`). The port is auto-detected by USB VID: Espressif's (`0x303A`) for the servo head or Raspberry Pi's (`0x2E8A`) for the stepper head.
 
 Opening the port: on Linux (verified on hardware, 2026-10-01), opening the USB-Serial-JTAG port with pyserial's defaults (DTR/RTS asserted) does **not** reset the chip. Toggling DTR/RTS individually can, because that is the auto-reset signal `esptool` uses. Clients shouldn't touch the modem lines.
 
-`apps/host-sim/owlet_sim` runs the real `ControlLoop` + `TextProtocol` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it.
+`apps/host-sim/owlet_sim` runs the real `ControlLoop` + `TextProtocol` + `PanTilt` + `Servo` + `PCA9685` stack against the PCA9685 simulator, behind a Linux pseudo-terminal. You can drive it with the CLI without any hardware, and the end-to-end test uses it. `--cal-file PATH` gives it a calibration store that survives restarts, and `--inject` raises events its hardware cannot (limit hits, faults, an offline driver, a stall) from lines typed on standard input.
 
 ## 8. Testing strategy
 
-- **Unit (GTest):** Servo, StepperAxis (exact arrival, speed and acceleration limits, braking, soft limits, a busy generator, calibration), the shared enable line, the text protocol codec (checksum, framer, parser, writer), PanTilt, ProtocolMux and ControlLoop (with fake protocols, tickers and ports), and TextProtocol (fake serial + fake clock).
+- **Unit (GTest):** Servo, StepperAxis (exact arrival, speed and acceleration limits, braking, soft limits, a busy generator, calibration), the shared enable line, the TMC2209 datagrams and monitor, the event bus and notifiers, the trouble log, the limit trip, axis and head homing, the calibration codec and store, the text protocol codec (checksum, framer, parser, writer), PanTilt, ProtocolMux and ControlLoop (with fake protocols, tickers and ports), and TextProtocol (fake serial + fake clock).
 - **Integration (GTest):** the real driver stack over `VirtualI2CBus` + `PCA9685Simulator`, asserting on the PWM counts the chip would output.
 - **Cross-language:** C++ and Python both validate `docs/protocol_vectors.txt`.
 - **End-to-end:** the Python client drives `owlet_sim` over a pty.
-- **On-target:** manual, recorded in the dev journal.
+- **On-target:** `owlet selftest` (moves the head inside its limits and reports), the opt-in Python hardware suites (`OWLET_HW=1`, `OWLET_WIDE_CAL_HW=1`), and checks by eye, recorded in the dev journal and `docs/CALIBRATION.md`.
 
 ## 9. Open questions
 
 | # | Question | Plan |
 |---|----------|------|
-| 1 | Real pulse endpoints for ±90° on the actual servos (500/2500 µs is nominal; many clones stop short or hit the end stop) | Measure in P7, then update the Kconfig defaults and `docs/CALIBRATION.md`. |
+| 1 | Real pulse endpoints for ±90° on the actual servos | **Closed (2026-10-02):** measured and stored on the head's flash with `owlet cal`, not in Kconfig; see `docs/CALIBRATION.md`. |
 | 2 | Should a mandatory checksum be relaxed for hand-typing in a terminal (e.g. accept `*XX` as "no checksum")? | Start strict; the CLI covers interactive use. Revisit if people ask. |
 | 3 | Per-axis speed? | Not in v1. Add `SPEED,<pan>,<tilt>` later if needed. |
-| 4 | Homing for the stepper head: it has no absolute position, so zero is wherever it was enabled. | One sensor per axis (hall or optical) on `GP10`/`GP11` and a homing routine that ends in `engageAt()`. Sensorless homing through the TMC2209's stall detection needs the UART link and a hard stop. |
+| 4 | Homing for the stepper head: it has no absolute position, so zero is wherever it was enabled. | **Done in code (0.5.0):** two switches per axis on `GP10`/`GP11` and `GP14`/`GP15`, `HeadHoming`, `$SEEK` (§6.6). Waiting for the switches to be fitted; the pan mounts are designed. Sensorless homing through stall detection remains an option. |
 | 5 | Should steps per degree and direction of a stepper be calibratable on the device, as servo pulses are? | Today they are build constants in `apps/pico-owlet/board.hpp` and the three drive numbers are zero. The neutral record has room for them. |
 | 6 | Where the stepper head actually loses steps. | Clean at 360 °/s and 1920 °/s² with a webcam; limits set to 240 and 1440. Find the edge only if more is ever needed, or when the camera gets heavier. |

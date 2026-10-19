@@ -122,7 +122,7 @@ owlet caps          # what this head can do
 owlet limits        # how far each axis may travel
 ```
 
-**Stepper head:** it has no position sensor yet, so centre both axes by hand before enabling. Wherever it is when enabled becomes 0, 0. A pen mark across each joint makes this quick. Switch the 12 V supply on first.
+**Stepper head:** it has no position sensor yet, so put both axes in their zero pose by hand before enabling (centred, or on the reference rig: pan centred and tilt pointing straight up). Wherever it is when enabled becomes 0, 0. A pen mark across each joint makes this quick. Switch the 12 V supply on first.
 
 Then let the head test itself. It asks before it moves:
 
@@ -168,8 +168,8 @@ Positive pan turns the camera to its own right; positive tilt points it up.
 | `could not auto-detect … (found [two ports])` | More than one head is connected: add `-p /dev/ttyACM1`. |
 | `no answer from owlet` right after it worked | Another program has the port open. Only one client can talk to a head at a time. |
 | Pico flash: `ignores every reboot request` | It runs firmware that cannot be asked. Hold `BOOTSEL` while plugging in, once. |
-| `NAK,MOVE,DIS` | The head is disabled: `owlet enable` first. |
-| `NAK,MOVE,RNG` | The target is outside the soft limits: `owlet limits`. |
+| `owlet: MOVE refused: DIS` | The head is disabled: `owlet enable` first. |
+| `owlet: MOVE refused: RNG` | The target is outside the soft limits: `owlet limits`. |
 | `owlet diag` says `no driver data` | Stepper head: the 12 V motor supply is off, or the drivers' UART wires are missing. The head still works without them. |
 | A stepper axis holds firmly but never turns | Its `STEP` wire is not reaching the driver. Check it against the [wiring diagram](wiring/pico-tmc2209/wiring.png); swapped `STEP`/`DIR` gives exactly this. |
 | An axis turns the wrong way | Stepper: flip `kPanReversed` / `kTiltReversed` in `apps/pico-owlet/board.hpp`. Servo: `owlet cal <axis> --reverse`. |

@@ -34,6 +34,7 @@ Matches the three labels printed on the board: EN top-left, DIR bottom-left, GND
 | Pico GP13 (pin 17)       | MS2 on both drivers                 | Microstep select, shared. No resistor needed. |
 | Pico GP4 (pin 6) and GP5 (pin 7) | PDN/UART on the **pan** driver, all three joined | TMC2209 UART for pan: TX and RX on one line. |
 | Pico GP0 (pin 1) and GP1 (pin 2) | PDN/UART on the **tilt** driver, all three joined | TMC2209 UART for tilt. |
+| Pico GP22 (pin 29)       | Activity LED cathode                | 3.3 V → resistor (about 330 Ω) → LED → GP22. The pin sinks the LED; lit while the head is moving. Optional. |
 
 The firmware uses the two UART lines to set each motor's current (so the potentiometers no
 longer matter), to select the microstep size, and to read load and fault status: `owlet diag`.
@@ -84,9 +85,11 @@ reach; the supply current is an easy way to check the setting without touching t
 ## Bring-up order
 
 1. Wire everything with the motors unplugged and the 12 V supply off.
-2. Switch on 12 V. Set each driver's current limit with the potentiometer: measure the voltage
-   between the pot's metal top and GND, and start at about 0.6 V. Clockwise/anticlockwise sense
-   varies between boards, so turn a little and re-measure.
+2. Switch on 12 V. The firmware sets the motor current over each driver's UART (450 mA run,
+   250 mA hold), so the potentiometer only matters if a driver's UART line is not working and it
+   falls back to standalone. To set it for that case: measure the voltage between the pot's metal
+   top and GND, and start at about 0.6 V. Clockwise/anticlockwise sense varies between boards, so
+   turn a little and re-measure.
 3. Switch 12 V off. Plug in the motors. Stick the heatsinks on the copper pad, clear of the pins.
 4. Switch 12 V on, then connect USB.
 5. Never plug or unplug a motor while 12 V is on.
@@ -98,8 +101,9 @@ Each stage only needs the one before it to have worked.
 1. **Logic only** (Pico on USB, drivers on `VIO`, no 12 V, no motors): `owlet ping`, `owlet caps`.
    `owlet enable` should pull `EN` low on both drivers, and `owlet move 20 0` should light the
    activity LED while it moves. `owlet disable` returns `EN` high.
-2. **12 V on, no motors:** set both current limits (step 2 of the bring-up order below).
-3. **Motors connected:** point the head forward, `owlet enable`, then small moves
+2. **12 V on, no motors:** `owlet diag` should show both drivers answering (`U`) at about 458 mA
+   with no faults. (Step 2 of the bring-up order above covers the potentiometer fallback.)
+3. **Motors connected:** put the head in the pose you want as zero, `owlet enable`, then small moves
    (`owlet move 10 0 --wait`). Pan + must turn right and tilt + must tilt up; if not, flip
    `kPanReversed` / `kTiltReversed` in `board.hpp`, or swap the two wires of one coil.
 4. **Limits:** find the safe travel by hand and store it with `owlet cal`.

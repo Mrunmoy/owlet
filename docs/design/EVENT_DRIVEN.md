@@ -1,6 +1,6 @@
-# Event-driven owlet: design proposal
+# Event-driven owlet: design
 
-*Status: proposal, 2026-10-05, revised the same day with the owner's decisions (section 12). Nothing here is implemented.*
+*Status: written 2026-10-05 as a proposal, revised the same day with the owner's decisions (section 12), and implemented in firmware 0.5.0 except where section 11 says otherwise.*
 
 ## 1. Why
 
@@ -59,7 +59,7 @@ There is no event for "started moving": the activity light already follows the h
 
 A tagged struct was chosen over typed signals (`Signal<Args...>` with slot arrays). Typed signals read nicely but each instantiation costs code on a Cortex-M0+, they cannot be put in one queue, and a test cannot simply compare two of them. A flat struct can be queued, logged, compared and sent down the wire with one small table.
 
-### 3.2 `EventQueue<N>`
+### 3.2 `EventQueue<N>` (built as the ring inside `core::EventBus`)
 
 A ring of `N` events (16 to start: 128 bytes). `post()` may be called from an interrupt or from the loop. It takes a few instructions inside an interrupt lock; the RP2040's core has no atomic compare-and-swap, so a brief mask is both the simplest correct choice and the usual one. The lock is an injected `hal::IInterruptLock`, a no-op on the host.
 
@@ -186,7 +186,7 @@ A *handler* is a function in your own program that the client calls when the hea
 - `halt()` is tested on a fake generator: called mid-burst it stops the count, and the latch produces exactly one `LimitHit`.
 - Overflow, ordering, and "an observer posts during dispatch" get their own tests.
 - The Python side is tested against `owlet_sim`, which gains a way to inject a limit hit and a fault.
-- All 300 existing tests keep passing at every step of section 11.
+- All existing tests (300 when this was written; 368 C++ now) keep passing at every step of section 11.
 
 ## 9. Building more than one
 
@@ -204,7 +204,7 @@ Each step leaves every test passing and the head working.
 
 1. **Done.** `Event`, `EventBus`, `IInterruptLock`, with tests.
 2. **Done.** `PanTilt` posts `Arrived` and `WatchdogExpired`; bus faults become `BusFault` / `BusOk`. `TextProtocol` is an observer and `onTick` only schedules the position stream. The bytes on the wire did not change. `tick()` still returns its status to a direct caller; protocols no longer receive it.
-3. **Done.** `Tmc2209Monitor` tells a listener when its chip comes, goes or changes its faults; `core::AxisEventRelay` turns that into `DriverOnline`, `DriverOffline`, `DriverFaultChanged` (drivers do not depend on the event types). `$EVT`, `$EVENTS`, `$STAT` and the Python signals are in. Still to do from this step: a way to inject a limit hit or a fault into `owlet_sim`, and a check with the motor supply on that the open-coil bits do not make `FAULT` chatter between standstill and motion.
+3. **Done.** `Tmc2209Monitor` tells a listener when its chip comes, goes or changes its faults; `core::AxisEventRelay` turns that into `DriverOnline`, `DriverOffline`, `DriverFaultChanged` (drivers do not depend on the event types). `$EVT`, `$EVENTS`, `$STAT` and the Python signals are in. `owlet_sim --inject` raises a limit hit, a fault, an offline driver or a stall from its standard input. Still to do from this step: a check with the motor supply on that the open-coil bits do not make `FAULT` chatter between standstill and motion.
 4. **Done in code; waiting for the switches.** `IStepGenerator::halt()` / `resume()`; `core::LimitTrip` runs in a switch's interrupt, halts the pulses and posts `LimitHit`; `StepperAxis` withholds steps toward a pressed switch, and on finding its generator halted ends the move, marks itself blocked and resumes the generator; `PanTilt` turns a blocked axis into `PositionLost` and refuses motion until `SEEK` or a fresh `ENABLE,<pan>,<tilt>`; `HeadHoming` homes tilt then pan. In the Pico app all of it sits behind `kLimitSwitchesFitted = false`. Two switches per axis (owner, 2026-10-05). The one change from the plan: the axis, not the homing routine, resumes a halted generator, so homing needs no special case.
 5. **Done, bar one item.** `CAL,SAVE` is refused while moving and `$STAT` carries the loop counters. Splitting the TMC2209 exchange is not done. First measurement on the Pico, with the motor supply off so the drivers were only being probed: no late pass in five seconds idle and two moves (longest gap 3 ms), one late pass of 4 ms during a second of velocity mode, and a 13 ms gap for a flash save at rest. The 4 ms pass is probably a driver probe waiting out its reply timeout, which is the blocking exchange this item is about; it needs measuring again with the drivers powered before deciding how to split it.
 6. **Board file done:** `apps/pico-owlet/board.hpp` holds the pins, polarities, mechanism, driver settings, speeds, limits and switch pins. Self-test additions (switch wiring, homing repeatability, the `$STAT` counters) wait for the switches, since two of the three need them.
@@ -218,7 +218,7 @@ Headers touched along the way get their documentation converted to Doxygen, in t
 |---|---|---|
 | 1 | Limit reaction: a check in the motion path, or an interrupt that halts the pulses? | **Interrupt** (owner, 2026-10-05), so the reaction does not wait for the loop. The level check is kept alongside it for a switch already pressed. Section 4. |
 | 2 | Homing at power-up: automatic, or on command? | **On command for now; automatic once it has earned trust** (owner, 2026-10-05). It will be a stored setting, off by default, because automatic homing means the head moves by itself at switch-on. |
-| 3 | Python: when does the reader thread exist, and where do handlers run? | **Proposed:** no thread until a handler is connected, then handlers on the reader thread, with a manual mode. Section 7. Open until the owner confirms. |
+| 3 | Python: when does the reader thread exist, and where do handlers run? | **Built as proposed (client 0.4.0):** no thread until a handler is connected, then handlers on the reader thread, with a manual mode (`dispatch="manual"`). Section 7. |
 
 ## 13. What will not be built
 

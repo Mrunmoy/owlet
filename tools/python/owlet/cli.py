@@ -86,7 +86,7 @@ def _cal(head: Owlet, args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="owlet", description="Drive an owlet pan-tilt head.")
-    p.add_argument("-p", "--port", help="serial port (default: auto-detect the ESP32-S3)")
+    p.add_argument("-p", "--port", help="serial port (default: auto-detect an owlet head)")
     p.add_argument("-t", "--timeout", type=float, default=1.0,
                    help="seconds to wait for each reply (default 1.0)")
     sub = p.add_subparsers(dest="cmd", required=True)

@@ -74,7 +74,7 @@ The head has no position sensor. **Whatever pose it is in when it powers up (or 
 
 ### Finding the limits
 
-1. Centre by hand, power on, `owlet enable`, `owlet speed 10`.
+1. Put the head in its zero pose by hand, power on, `owlet enable`, `owlet speed 10`.
 2. Widen the limit you are exploring, up to the compiled travel: `owlet cal pan --limits -180 180` (not saved).
 3. `owlet nudge` towards an end in small steps. The end is where a cable goes tight or something would touch, minus a margin.
 4. Set and keep the result: `owlet cal pan --limits MIN MAX`, `owlet cal save`. To make it the factory value too, edit `kPanAxis` / `kTiltAxis` in `board.hpp`.

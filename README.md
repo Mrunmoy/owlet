@@ -768,7 +768,7 @@ The USB port carries **only** protocol traffic. On the ESP32 head, firmware logs
 | `tools/esp/` | `flash.sh [PORT]`: flash the ESP32-S3 servo head without `build.py` |
 | `cmake/` | `owlet-idf-components.cmake`: the ESP-IDF component list for apps and submodule consumers |
 | `datasheets/` | Index and fetch script for the chips' datasheets (the PDFs are not tracked) |
-| `docs/` | Design, calibration, getting started, dev journal, protocol test vectors, wiring diagrams; `docs/design/` holds the event-driven design |
+| `docs/` | Design, calibration and hardware test record, getting started, protocol test vectors, wiring diagrams; `docs/design/` holds the event-driven design |
 | `build.py` · `flake.nix` | Build/test/flash entry point · reproducible toolchain |
 
 Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers and no dynamic memory, and it builds and runs on a PC. Only `platform/` and the two firmware apps touch ESP-IDF or the pico-sdk. Read [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and the reasoning behind it.
@@ -820,7 +820,7 @@ Code in `drivers/` and `firmware/common/` is plain C++17 with no vendor headers 
 - [x] Mechanical design files for the stepper head ([`mechanical/stepper-head/`](mechanical/stepper-head/))
 - [ ] Mechanical design files for the servo bracket
 
-Progress, decisions and test evidence are logged in [`docs/DEV_JOURNAL.md`](docs/DEV_JOURNAL.md).
+What has been measured and verified on the reference heads is recorded in [`docs/CALIBRATION.md`](docs/CALIBRATION.md).
 
 ## Contributing
 

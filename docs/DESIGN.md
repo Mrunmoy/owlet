@@ -517,7 +517,7 @@ Opening the port: on Linux (verified on hardware, 2026-10-01), opening the USB-S
 - **Integration (GTest):** the real driver stack over `VirtualI2CBus` + `PCA9685Simulator`, asserting on the PWM counts the chip would output.
 - **Cross-language:** C++ and Python both validate `docs/protocol_vectors.txt`.
 - **End-to-end:** the Python client drives `owlet_sim` over a pty.
-- **On-target:** `owlet selftest` (moves the head inside its limits and reports), the opt-in Python hardware suites (`OWLET_HW=1`, `OWLET_WIDE_CAL_HW=1`), and checks by eye, recorded in the dev journal and `docs/CALIBRATION.md`.
+- **On-target:** `owlet selftest` (moves the head inside its limits and reports), the opt-in Python hardware suites (`OWLET_HW=1`, `OWLET_WIDE_CAL_HW=1`), and checks by eye, recorded in `docs/CALIBRATION.md`.
 
 ## 9. Open questions
 

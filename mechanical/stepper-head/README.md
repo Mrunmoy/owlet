@@ -6,7 +6,7 @@ A belt-driven pan-tilt head for two pancake NEMA 17 motors, driven by a Raspberr
 
 Photos and video of the built head: *to come.*
 
-Everything on this page is what the reference head was built from. Shopping links are for amazon.com.au; any part that matches the description works.
+Everything on this page is what the reference head was built from. Shopping links are to the Australian shops the reference head's parts came from (amazon.com.au and Jaycar); any part that matches the description works. Several rows share one listing: an M3 screw assortment for the fasteners, and one GT2 listing for the pulleys and belts.
 
 ## Printed parts
 
@@ -33,37 +33,37 @@ openscad -D 'part="cradle"' -o stl/cradle.stl pan_tilt.scad
 
 ### Electronics
 
-| Qty | Part | Notes | Buy |
+| Qty | Part | Notes | Where to buy |
 |----:|------|-------|-----|
-| 1 | Raspberry Pi Pico (RP2040), with headers | Any pin-compatible RP2040 board. Powered from USB, which also carries the protocol | *link to come* |
-| 2 | TMC2209 StepStick driver module | The firmware sets the motor current over each driver's UART pin, so the potentiometer does not need adjusting | *link to come* |
-| 1 | 12 V supply, 2 A or more | A USB-C PD trigger board set to 12 V, or a 12 V adapter. The head draws about 0.8 A at peak | *link to come* |
-| 2 | 100 µF 25 V electrolytic capacitor | One across each driver's motor supply. Optional if the supply has a large output capacitor on short wires | *link to come* |
+| 1 | Raspberry Pi Pico (RP2040), with headers | Any pin-compatible RP2040 board. Powered from USB, which also carries the protocol | [Amazon](https://www.amazon.com.au/dp/B0C3BWBL2F) |
+| 2 | TMC2209 StepStick driver module | The firmware sets the motor current over each driver's UART pin, so the potentiometer does not need adjusting | [Amazon](https://www.amazon.com.au/dp/B0G4QKY33F) |
+| 1 | 12 V supply, 2 A or more | A USB-C PD trigger board set to 12 V, or a 12 V adapter. The head draws about 0.8 A at peak | [Jaycar](https://www.jaycar.com.au/usb-c-type-c-pd-trigger-module-supports/p/PP2080) |
+| 2 | 100 µF 25 V electrolytic capacitor | One across each driver's motor supply. Optional if the supply has a large output capacitor on short wires | [Jaycar](https://www.jaycar.com.au/100uf-25vdc-low-esr-electrolytic-capacitor/p/RE6322) |
 | 1 | Breadboard or perfboard, and jumper wires | To carry the Pico and the two drivers; the wiring is in [`docs/wiring/pico-tmc2209/`](../../docs/wiring/pico-tmc2209/README.md) | *link to come* |
-| 1 | USB data cable (Micro-USB or USB-C, to suit the board) | Pico to computer (or Raspberry Pi) | *link to come* |
-| 1 | LED and 330 Ω resistor | *Optional* activity light | *link to come* |
-| 4 | Endstop module (lever microswitch on a small board, the common 3D-printer type) | *Optional*, two per axis. Supported in the firmware but not yet fitted to the reference head | *link to come* |
+| 1 | USB data cable (Micro-USB or USB-C, to suit the board) | Pico to computer (or Raspberry Pi) | [Amazon](https://www.amazon.com.au/dp/B0BWHTX1R7) |
+| 1 | LED and 330 Ω resistor | *Optional* activity light | [Amazon](https://www.amazon.com.au/dp/B0GXYBK7FS) |
+| 4 | Endstop module (lever microswitch on a small board, the common 3D-printer type) | *Optional*, two per axis. Supported in the firmware but not yet fitted to the reference head | [Amazon](https://www.amazon.com.au/dp/B0GDCXSZHT) |
 
 ### Motion
 
-| Qty | Part | Notes | Buy |
+| Qty | Part | Notes | Where to buy |
 |----:|------|-------|-----|
-| 2 | NEMA 17 pancake stepper, 1.8°, about 23 mm body, 5 mm shaft | With its motor cable | *link to come* |
-| 2 | GT2 20T pulley, 5 mm bore, 6 mm belt | On the motor shafts | *link to come* |
-| 2 | GT2 60T pulley, 6 mm belt, 5 mm bore (or 8 mm with a printed bushing) | On the output shafts | *link to come* |
-| 2 | GT2 closed belt, 200 mm, 6 mm wide | | *link to come* |
-| 4 | 625ZZ bearing (5 × 16 × 5 mm) | Two per axis | *link to come* |
-| 2 | 5 mm steel rod: 80 mm (pan) and 120 mm or longer (tilt) | Cut from one longer rod if needed | *link to come* |
+| 2 | NEMA 17 pancake stepper, 1.8°, about 23 mm body, 5 mm shaft | With its motor cable | [Amazon](https://www.amazon.com.au/dp/B0F32H6JNP) |
+| 2 | GT2 20T pulley, 5 mm bore, 6 mm belt | On the motor shafts | [Amazon](https://www.amazon.com.au/dp/B0F9YZV8NY) |
+| 2 | GT2 60T pulley, 6 mm belt, 5 mm bore (or 8 mm with a printed bushing) | On the output shafts | [Amazon](https://www.amazon.com.au/dp/B0F9YZV8NY) |
+| 2 | GT2 closed belt, 200 mm, 6 mm wide | | [Amazon](https://www.amazon.com.au/dp/B0F9YZV8NY) |
+| 4 | 625ZZ bearing (5 × 16 × 5 mm) | Two per axis | [Amazon](https://www.amazon.com.au/dp/B0H7ML3WHT) |
+| 2 | 5 mm steel rod: 80 mm (pan) and 120 mm or longer (tilt) | Cut from one longer rod if needed | [Amazon](https://www.amazon.com.au/dp/B0D1KH2FN9) or [Amazon](https://www.amazon.com.au/dp/B07MP9Y897) |
 
 ### Fasteners
 
-| Qty | Part | Where | Buy |
+| Qty | Part | Where | Where to buy |
 |----:|------|-------|-----|
-| 8 | M3 × 8 screw | Motor faces. The motor holes are shallow, so no longer | *link to come* |
-| 6 | M3 × 12 screw | Bottom plate to the base | *link to come* |
-| 2 | M3 × 8 screw + M3 nut | Set screws in the yoke hub and the shaft collar | *link to come* |
-| 2 | M3 × 25 bolt + M3 nut | Pinch clamps on the cradle | *link to come* |
-| 4 | M3 × 8 screw + M3 nut | *Optional:* switch boards to the pan brackets | *link to come* |
+| 8 | M3 × 8 screw | Motor faces. The motor holes are shallow, so no longer | [Amazon](https://www.amazon.com.au/dp/B0FH4Y4D4J) |
+| 6 | M3 × 12 screw | Bottom plate to the base | [Amazon](https://www.amazon.com.au/dp/B0FH4Y4D4J) |
+| 2 | M3 × 8 screw + M3 nut | Set screws in the yoke hub and the shaft collar | [Amazon](https://www.amazon.com.au/dp/B0FH4Y4D4J) |
+| 2 | M3 × 25 bolt + M3 nut | Pinch clamps on the cradle | [Amazon](https://www.amazon.com.au/dp/B0FH4Y4D4J) |
+| 4 | M3 × 8 screw + M3 nut | *Optional:* switch boards to the pan brackets | [Amazon](https://www.amazon.com.au/dp/B0FH4Y4D4J) |
 | 1 | 1/4"-20 camera screw, or two zip ties | Camera to the cradle | *link to come* |
 
 ### Camera

@@ -193,7 +193,6 @@ For anyone, or anything, about to change the code.
 | `tests/`, `tools/python/tests/` | C++ and Python tests |
 | `tools/python/owlet/` | The PC client and `owlet` command |
 | `docs/DESIGN.md` | Architecture, protocol reference, behaviour |
-| `docs/DEV_JOURNAL.md` | Why each change was made and how it was verified |
 
 **The three places to extend it**, each a class or a folder, with nothing else changing: a motor type (`hal::IAxis`), a board (`platform/owlet_<board>/` plus a wiring-only `main.cpp`), a transport (`hal::IByteSource` / `IByteSink`). [`DESIGN.md` §4.7](DESIGN.md) walks through each.
 
@@ -204,7 +203,7 @@ For anyone, or anything, about to change the code.
 - Behaviour lives in the tested libraries. A `main.cpp` makes no decisions.
 - A change to the protocol touches four places together: `owlet_text`, the Python client, `docs/DESIGN.md` §5 and `docs/protocol_vectors.txt`.
 - New C++ files are formatted with the repository's `.clang-format`. Naming and layout follow the existing code.
-- Every meaningful change gets a `docs/DEV_JOURNAL.md` entry saying why, and what was and was not verified.
+- Every hardware check records what was and was not verified in `docs/CALIBRATION.md`.
 
 **Working with real hardware**
 

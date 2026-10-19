@@ -351,7 +351,7 @@ TEST(StepperAxis, CalibrationIsLimitsOnly)
 
     EXPECT_TRUE(r.axis.acceptsCalibration(AxisCalibration{0, 0, 0, -150.0f, 120.0f}));
     EXPECT_FALSE(r.axis.acceptsCalibration(AxisCalibration{500, 1500, 2500, -90.0f, 90.0f}))
-        << "servo pulses mean nothing here";
+        << "drive numbers mean nothing to a stepper";
     EXPECT_FALSE(r.axis.acceptsCalibration(AxisCalibration{0, 0, 0, -171.0f, 90.0f}));
     EXPECT_FALSE(r.axis.acceptsCalibration(AxisCalibration{0, 0, 0, 10.0f, 90.0f}));
     EXPECT_FALSE(r.axis.acceptsCalibration(

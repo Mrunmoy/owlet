@@ -1,12 +1,12 @@
 """On-hardware checks: what only a real USB link and a real head can show.
 
-Opt-in, because it MOVES THE SERVOS (within ±20° of centre, ≤ 20 °/s):
+Opt-in, because it MOVES THE MOTORS (within ±20° of centre, ≤ 30 °/s):
 
     OWLET_HW=1 python -m unittest test_hardware -v          # from tools/python/tests
     OWLET_HW=1 OWLET_PORT=/dev/ttyACM0 python -m unittest test_hardware
 
-The head is homed and left limp after every motion test. Thresholds come from
-the reference head (ESP32-S3, 10 ms control loop) on 2026-10-02.
+The head is homed and left limp after every motion test. Thresholds were set on
+a head with a 10 ms control loop (2026-10-02); the Pico's is 2 ms.
 """
 
 import math
@@ -22,7 +22,7 @@ from owlet.tracking import DeviceClock, Tracker
 ENABLED = os.environ.get("OWLET_HW") == "1"
 
 
-@unittest.skipUnless(ENABLED, "set OWLET_HW=1 to run on a connected head (moves the servos)")
+@unittest.skipUnless(ENABLED, "set OWLET_HW=1 to run on a connected head (moves the motors)")
 class HardwareTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

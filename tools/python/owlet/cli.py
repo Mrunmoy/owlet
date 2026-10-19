@@ -42,15 +42,13 @@ def _shell(head: Owlet) -> None:
 
 
 def _fmt_cal(c) -> str:
-    rev = "reversed" if c.reversed else "normal"
-    return (f"{c.axis:<4}  pulses {c.min_us}/{c.center_us}/{c.max_us} us   "
-            f"limits {c.min_deg:.1f}..{c.max_deg:.1f} deg   {rev}   ({c.source})")
+    return f"{c.axis:<4}  limits {c.min_deg:.1f}..{c.max_deg:.1f} deg   ({c.source})"
 
 
 def _cal(head: Owlet, args) -> int:
-    changing = args.limits is not None or args.pulses is not None or args.reverse is not None
+    changing = args.limits is not None
     if args.target in ("save", "reset") and changing:
-        print(f"`cal {args.target}` takes no --limits/--pulses/--reverse", file=sys.stderr)
+        print(f"`cal {args.target}` takes no --limits", file=sys.stderr)
         return 2
     if args.target == "save":
         head.save_calibration()
@@ -65,18 +63,7 @@ def _cal(head: Owlet, args) -> int:
         if args.target is None:
             print("choose an axis to change: owlet cal pan|tilt ...", file=sys.stderr)
             return 2
-        c = head.calibration(args.target)
-        mn, ct, mx = args.pulses if args.pulses else (c.min_us, c.center_us, c.max_us)
-        if args.reverse is not None and (mn > mx) != args.reverse:
-            mn, mx = mx, mn
-        lo, hi = c.min_deg, c.max_deg
-        if (mn > mx) != c.reversed:
-            # The direction really changes: mirror the limits so they keep
-            # guarding the same physical end stops.
-            lo, hi = -hi, -lo
-        if args.limits:
-            lo, hi = args.limits  # explicit limits are the final ones
-        head.set_calibration(args.target, mn, ct, mx, lo, hi)
+        head.set_limits(args.target, *args.limits)
     for a in axes:
         print(_fmt_cal(head.calibration(a)))
     if changing:
@@ -133,12 +120,6 @@ def build_parser() -> argparse.ArgumentParser:
                      help="axis to show/change, or save/reset (default: show both axes)")
     cal.add_argument("--limits", nargs=2, type=float, metavar=("MIN", "MAX"),
                      help="soft limits in degrees")
-    cal.add_argument("--pulses", nargs=3, type=int, metavar=("MIN_US", "CENTER_US", "MAX_US"),
-                     help="pulse widths at -90/0/+90 degrees (servos must be disabled)")
-    rev = cal.add_mutually_exclusive_group()
-    rev.add_argument("--reverse", dest="reverse", action="store_const", const=True,
-                     help="make + go the other way (servos must be disabled)")
-    rev.add_argument("--no-reverse", dest="reverse", action="store_const", const=False)
     w = sub.add_parser("watch", help="stream positions until Ctrl-C")
     w.add_argument("--hz", type=int, default=10)
     sub.add_parser("shell", help="interactive prompt")

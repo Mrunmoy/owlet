@@ -41,9 +41,8 @@ def _axis(name: str) -> str:
         raise ValueError(f"axis must be 'pan' or 'tilt', not {name!r}")
     return a
 
-ESPRESSIF_VID = 0x303A
-RASPBERRY_PI_VID = 0x2E8A  # Pico stepper head (pico-sdk USB CDC)
-OWLET_VIDS = frozenset({ESPRESSIF_VID, RASPBERRY_PI_VID})
+RASPBERRY_PI_VID = 0x2E8A  # the Pico (pico-sdk USB CDC)
+OWLET_VIDS = frozenset({RASPBERRY_PI_VID})
 
 # Sentences that are replies to a request (POS is excluded: it is also streamed).
 REPLY_NAMES = frozenset({"ACK", "NAK", "ERR", "PONG", "CLOCK", "SPEED", "WATCHDOG", "LIMITS"})
@@ -63,7 +62,7 @@ class OwletError(Exception):
 
 
 def find_ports() -> list[str]:
-    """Serial devices that look like an owlet head (ESP32 or Raspberry Pi Pico USB)."""
+    """Serial devices that look like an owlet head (a Raspberry Pi Pico on USB)."""
     return sorted(p.device for p in list_ports.comports() if p.vid in OWLET_VIDS)
 
 
@@ -223,7 +222,8 @@ class Owlet:
         return self.protocol_version, self.firmware_version
 
     def enable(self, pan: float | None = None, tilt: float | None = None) -> None:
-        """Energise the servos. With a pose they snap there (if disabled)."""
+        """Energise the motors. With a pose, the head takes that as where it is now
+        (if disabled); a stepper does not move to it."""
         if (pan is None) != (tilt is None):
             raise ValueError("give both pan and tilt, or neither")
         args = () if pan is None else (pan, tilt)
@@ -302,8 +302,8 @@ class Owlet:
     def diag(self, axis: str) -> Diagnostics:
         """What the motor driver of 'pan' or 'tilt' reports: faults, load, stall, current.
 
-        ``available`` is False on a head whose drivers have no data link (the
-        servo head) or while a driver is not answering (its motor supply is off).
+        ``available`` is False while a driver is not answering (its motor
+        supply is off, or its UART wire is missing).
         Firmware before 0.4.0 does not know the command and raises OwletError.
         """
         a = _axis(axis)
@@ -311,10 +311,9 @@ class Owlet:
 
     def set_calibration(self, axis: str, min_us: int, center_us: int, max_us: int,
                         min_deg: float, max_deg: float) -> None:
-        """Replace an axis's calibration (in RAM; ``save_calibration`` persists).
-
-        Changing the pulses requires the servos to be disabled (error code
-        ``ENA``); changing only the limits works at any time.
+        """Replace an axis's calibration record (in RAM; ``save_calibration``
+        persists). The three drive numbers are always 0 on the stepper head,
+        which refuses anything else with ``RNG``; use ``set_limits``.
         """
         self._ack("CAL", _axis(axis).upper(), int(min_us), int(center_us), int(max_us),
                   min_deg, max_deg)
@@ -324,24 +323,13 @@ class Owlet:
         c = self.calibration(axis)
         self.set_calibration(axis, c.min_us, c.center_us, c.max_us, min_deg, max_deg)
 
-    def set_reversed(self, axis: str, reversed_: bool) -> None:
-        """Make + go the other way (servos must be disabled). Does nothing if
-        the axis is already in that state.
-
-        Swaps the pulse endpoints *and mirrors the limits*, so the soft limits
-        keep protecting the same physical end stops.
-        """
-        c = self.calibration(axis)
-        if c.reversed != reversed_:
-            self.set_calibration(axis, c.max_us, c.center_us, c.min_us, -c.max_deg, -c.min_deg)
-
     def save_calibration(self) -> None:
         """Store both axes' calibration in the device's flash."""
         self._ack("CAL", "SAVE")
 
     def reset_calibration(self) -> None:
-        """Restore factory calibration and erase the saved copy (servos must be
-        disabled)."""
+        """Restore the factory calibration and erase the saved copy (the head
+        must be disabled)."""
         self._ack("CAL", "RESET")
 
     def stream(self, hz: int) -> None:

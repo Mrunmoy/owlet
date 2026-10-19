@@ -63,7 +63,7 @@ class EndToEndTest(unittest.TestCase):
 
     def test_enable_move_wait(self):
         self.head.enable()
-        self.head.speed(400)
+        self.head.speed(240)
         final = self.head.move(30, -15, wait=True, timeout=3)
         self.assertEqual((final.pan, final.tilt, final.state), (30.0, -15.0, "H"))
         self.assertIsInstance(final.t_ms, int)
@@ -73,7 +73,7 @@ class EndToEndTest(unittest.TestCase):
         with self.assertRaises(OwletError) as cm:
             self.head.move(95, 0)
         self.assertEqual(cm.exception.code, "RNG")
-        self.assertEqual(self.head.limits(), (-90.0, 90.0, -90.0, 90.0))
+        self.assertEqual(self.head.limits(), (-90.0, 90.0, -60.0, 60.0))
 
     def test_watch_streams_positions(self):
         self.head.enable()
@@ -101,10 +101,20 @@ class EndToEndTest(unittest.TestCase):
             if s is not None:
                 events.append(s)
         self.assertTrue(any(e.name == "TIMEOUT" and e.fields == ("VEL",) for e in events))
-        p = self.head.position()
-        self.assertEqual(p.state, "H")
+        p = self._settled()
         self.assertGreater(p.pan, 3.0)   # moved for ~200 ms at 30°/s
         self.assertLess(p.pan, 12.0)
+
+    def _settled(self, timeout=0.5):
+        """The pose once the head has braked to a stop (a stepper ramps down
+        at its acceleration instead of halting dead)."""
+        deadline = time.monotonic() + timeout
+        p = self.head.position()
+        while p.state != "H" and time.monotonic() < deadline:
+            time.sleep(0.02)
+            p = self.head.position()
+        self.assertEqual(p.state, "H")
+        return p
 
     def test_velocity_refused_while_disabled(self):
         with self.assertRaises(OwletError) as cm:
@@ -136,8 +146,7 @@ class EndToEndTest(unittest.TestCase):
             self.assertLess(mid.pan, latest.pan)
             self.assertIsNone(tr.last_error)
         # Leaving the context stops velocity mode and streaming.
-        p = self.head.position()
-        self.assertEqual(p.state, "H")
+        p = self._settled()
         time.sleep(0.3)
         self.assertEqual(self.head.position().pan, p.pan)
 
@@ -215,54 +224,44 @@ class EndToEndTest(unittest.TestCase):
 
     def test_capabilities_are_reported(self):
         c = self.head.caps()
-        self.assertEqual((c.speed_max, c.velocity_max, c.stream_max_hz), (500.0, 500.0, 50))
+        self.assertEqual((c.speed_max, c.velocity_max, c.stream_max_hz), (240.0, 240.0, 50))
 
     def test_a_head_without_driver_data_reports_none(self):
-        # The simulator is the servo head: its drivers have nothing to say.
+        # The simulator has no motor drivers to ask, like a head with its 12 V off.
         d = self.head.diag("pan")
         self.assertFalse(d.available)
         self.assertEqual((d.faults, d.stalled, d.load, d.current_ma), (0, False, 0, 0))
 
     def test_calibration_persists_across_a_restart(self):
-        self.head.set_reversed("tilt", True)
         self.head.set_limits("pan", -85, 90)
+        self.head.set_limits("tilt", -120, 135)  # beyond the factory ±60, inside the ±135 travel
         self.head.save_calibration()
         self.stop_sim()
         self.start_sim()  # "power cycle": a fresh process loading the same store
         tilt, pan = self.head.calibration("tilt"), self.head.calibration("pan")
-        self.assertEqual((tilt.reversed, tilt.source), (True, "saved"))
+        self.assertEqual((tilt.min_deg, tilt.max_deg, tilt.source), (-120.0, 135.0, "saved"))
         self.assertEqual(pan.min_deg, -85.0)
-        self.assertEqual(self.head.limits()[0], -85.0)
-        # and it really drives the head: +45° tilt on a reversed axis is still "up"
+        self.assertEqual(self.head.limits(), (-85.0, 90.0, -120.0, 135.0))
+        # and it really drives the head
         self.head.enable()
-        self.assertEqual(self.head.move(0, 45, wait=True, timeout=3).tilt, 45.0)
+        self.assertEqual(self.head.move(0, 100, wait=True, timeout=3).tilt, 100.0)
 
     def test_reset_restores_factory_and_forgets_the_saved_copy(self):
-        self.head.set_reversed("tilt", True)
+        self.head.set_limits("tilt", -30, 30)
         self.head.save_calibration()
         self.head.reset_calibration()
         self.stop_sim()
         self.start_sim()
         t = self.head.calibration("tilt")
-        self.assertEqual((t.reversed, t.source), (False, "factory"))
+        self.assertEqual((t.min_deg, t.max_deg, t.source), (-60.0, 60.0, "factory"))
 
-    def test_cli_mirrors_limits_only_when_the_direction_really_changes(self):  # review N7
-        def cli(*args):
-            return subprocess.run([sys.executable, "-m", "owlet", "-p", self.link, *args],
-                                  capture_output=True, text=True, timeout=10,
-                                  cwd=REPO / "tools/python")
-        self.assertEqual(cli("cal", "tilt", "--reverse", "--limits", "-80", "30").returncode, 0)
-        # Already reversed: new pulses, still reversed -> limits untouched.
-        self.assertEqual(cli("cal", "tilt", "--pulses", "600", "1500", "2400", "--reverse").returncode, 0)
-        c = self.head.calibration("tilt")
-        self.assertEqual((c.min_us, c.max_us, c.reversed), (2400, 600, True))
-        self.assertEqual((c.min_deg, c.max_deg), (-80.0, 30.0))
-        # Normal axis given reversed pulses with --no-reverse: un-reversed, limits untouched.
-        self.assertEqual(cli("cal", "pan", "--limits", "-30", "80").returncode, 0)
-        self.assertEqual(cli("cal", "pan", "--pulses", "2400", "1500", "600", "--no-reverse").returncode, 0)
-        p = self.head.calibration("pan")
-        self.assertEqual((p.min_us, p.max_us, p.reversed), (600, 2400, False))
-        self.assertEqual((p.min_deg, p.max_deg), (-30.0, 80.0))
+    def test_limits_beyond_the_compiled_travel_are_refused(self):
+        with self.assertRaises(OwletError) as cm:
+            self.head.set_limits("tilt", -135.1, 135)
+        self.assertEqual(cm.exception.code, "RNG")
+        with self.assertRaises(OwletError) as cm:
+            self.head.set_calibration("pan", 500, 1500, 2500, -90, 90)  # drive numbers must be 0 on a stepper
+        self.assertEqual(cm.exception.code, "RNG")
 
     def test_cli(self):
         def cli(*args):
@@ -270,13 +269,11 @@ class EndToEndTest(unittest.TestCase):
                                   capture_output=True, text=True, timeout=10,
                                   cwd=REPO / "tools/python")
         self.assertIn("protocol v3", cli("ping").stdout)
-        self.assertIn("velocity max 500.0", cli("caps").stdout)
+        self.assertIn("velocity max 240.0", cli("caps").stdout)
         self.assertIn("no driver data", cli("diag").stdout)
-        self.assertEqual(cli("cal", "tilt", "--reverse", "--limits", "-80", "85").returncode, 0)
+        self.assertEqual(cli("cal", "tilt", "--limits", "-80", "85").returncode, 0)
         out = cli("cal").stdout
-        self.assertIn("tilt", out)
-        self.assertIn("reversed", out)
-        self.assertIn("-80.0..85.0", out)  # explicit --limits are the final limits, after reversing
+        self.assertIn("tilt  limits -80.0..85.0 deg", out)
         self.assertEqual(cli("cal", "save", "--limits", "1", "2").returncode, 2)  # flags + save: refused
         self.assertEqual(cli("cal", "save").returncode, 0)
         self.assertIn("saved", cli("cal", "tilt").stdout)
@@ -377,7 +374,7 @@ class EventsEndToEndTest(unittest.TestCase):
         self.assertEqual([t.name for t in self.head.trouble_codes()], ["WATCHDOG"])
         self.assertEqual(self.head.stats()["dropped"], 0)
 
-    def test_a_servo_head_cannot_seek(self):
+    def test_a_head_without_switches_cannot_seek(self):
         with self.assertRaises(OwletError) as cm:
             self.head.seek_home()
         self.assertEqual(cm.exception.code, "UNS")

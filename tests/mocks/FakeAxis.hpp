@@ -5,8 +5,9 @@
 namespace owlet::test
 {
 
-// A motor that is neither a servo nor a stepper: it reaches any target in one
-// tick. Proves the motion policy needs nothing beyond hal::IAxis.
+// A motor that is not a stepper: it reaches any target in one tick. Proves the
+// motion policy needs nothing beyond hal::IAxis, and stands in for an axis
+// whose power can fail to switch, which no StepperAxis can.
 class FakeAxis final : public ::owlet::hal::IAxis
 {
 public:
@@ -23,6 +24,10 @@ public:
     }
     [[nodiscard]] bool release() override
     {
+        if (failRelease)
+        {
+            return false;
+        }
         on = false;
         return true;
     }
@@ -113,6 +118,7 @@ public:
     int ticks{0};
     bool on{false};
     bool failEngage{false};
+    bool failRelease{false};
 };
 
 } // namespace owlet::test

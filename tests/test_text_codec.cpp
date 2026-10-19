@@ -90,7 +90,7 @@ TEST(LineFramer, AcceptsBareLf)
 TEST(LineFramer, IgnoresBytesOutsideFrames)
 {
     FramerHarness h;
-    h.feed("ESP-ROM:esp32s3-20210327\r\nrst:0x1\r\n$POS*4C\r\n");
+    h.feed("boot rom v2\r\nrst:0x1\r\n$POS*4C\r\n");
     ASSERT_EQ(h.frames.size(), 1u);
     EXPECT_EQ(h.frames[0], "$POS*4C");
 }

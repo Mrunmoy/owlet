@@ -1,27 +1,29 @@
 #include "FakeCalibrationStore.hpp"
 #include "FakeClock.hpp"
 #include "FakeSerialPort.hpp"
-#include "FakeServoChannel.hpp"
+#include "ReferenceStepperHead.hpp"
 #include "owlet/core/Calibrator.hpp"
 #include "owlet/core/ControlLoop.hpp"
 #include "owlet/core/PanTilt.hpp"
-#include "owlet/servo/Servo.hpp"
+#include "owlet/core/ProtocolMux.hpp"
+#include "owlet/stepper/StepperAxis.hpp"
 #include "owlet/text/LineWriter.hpp"
 #include "owlet/text/TextProtocol.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
-using ::owlet::Servo;
+using ::owlet::StepperAxis;
 using ::owlet::core::ControlLoop;
 using ::owlet::text::TextProtocol;
 using ::owlet::core::PanTilt;
 using ::owlet::text::LineWriter;
 using ::owlet::test::FakeClock;
 using ::owlet::test::FakeSerialPort;
-using ::owlet::test::FakeServoChannel;
+using ::owlet::test::ReferenceAxes;
 
 namespace
 {
@@ -40,17 +42,14 @@ std::string line(const std::string& body)
     return f.substr(0, f.size() - 2);
 }
 
-::owlet::core::CalibrationRecord factoryCal()
+::owlet::core::CalibrationRecord factoryCal(const ReferenceAxes& axes)
 {
-    return ::owlet::core::CalibrationRecord{Servo::toAxisCalibration({}), Servo::toAxisCalibration({})};
+    return ::owlet::core::CalibrationRecord{axes.pan.defaultCalibration(),
+                                            axes.tilt.defaultCalibration()};
 }
 
-struct Rig
+struct Rig : ReferenceAxes
 {
-    FakeServoChannel panCh;
-    FakeServoChannel tiltCh;
-    Servo            pan{panCh, Servo::Calibration{}};
-    Servo            tilt{tiltCh, Servo::Calibration{}};
     FakeClock        clock{1000};
     uint32_t&        now = clock.t;
     ::owlet::hal::NullInterruptLock      lock;
@@ -59,7 +58,7 @@ struct Rig
     PanTilt          head{pan, tilt, &bus};
     FakeSerialPort   port;
     ::owlet::test::FakeCalibrationStore store;
-    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal(*this)};
     TextProtocol     proto{port, head, calib, clock, "0.1.0", nullptr, &bus, &trouble};
     ControlLoop      proc{port, head, proto, &bus};
 
@@ -101,15 +100,12 @@ struct Rig
 
 TEST(TextProtocol, AnnouncesReadyOnBegin)
 {
-    FakeServoChannel a;
-    FakeServoChannel b;
-    Servo            pan{a, Servo::Calibration{}};
-    Servo            tilt{b, Servo::Calibration{}};
-    PanTilt          head{pan, tilt};
+    ReferenceAxes    axes;
+    PanTilt          head{axes.pan, axes.tilt};
     FakeSerialPort   port;
     FakeClock        clock;
     ::owlet::test::FakeCalibrationStore store;
-    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    ::owlet::core::Calibrator           calib{axes.pan, axes.tilt, head, store, factoryCal(axes)};
     TextProtocol     proto{port, head, calib, clock, "0.1.0"};
     proto.begin(0);
     EXPECT_EQ(port.takeLines(), std::vector<std::string>{line("READY,3,0.1.0")});
@@ -131,7 +127,8 @@ TEST(TextProtocol, MoveWhileDisabledIsNakDis)
 {
     Rig r;
     EXPECT_EQ(r.send("MOVE,10,10"), std::vector<std::string>{line("NAK,MOVE,DIS")});
-    EXPECT_TRUE(r.panCh.writes.empty());
+    (void) r.advance(100);
+    EXPECT_FALSE(r.anyStepped());
 }
 
 TEST(TextProtocol, EnableMoveArriveSequence)
@@ -143,9 +140,14 @@ TEST(TextProtocol, EnableMoveArriveSequence)
 
     const std::vector<std::string> mid = r.advance(100);
     EXPECT_TRUE(mid.empty());
-    EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,10.0,-10.0,30.0,-15.0,M")});
+    const std::vector<std::string> moving = r.send("POS");
+    ASSERT_EQ(moving.size(), 1u);
+    EXPECT_NE(moving[0].find(",30.0,-15.0,M,"), std::string::npos) << moving[0];
+    EXPECT_GT(r.head.position().pan, 0.0f);
+    EXPECT_LT(r.head.position().pan, 30.0f);
 
-    const std::vector<std::string> done = r.advance(300);
+    // Ramping up and down takes longer than distance / speed.
+    const std::vector<std::string> done = r.advance(1000);
     EXPECT_EQ(done, std::vector<std::string>{line("ARRIVED,30.0,-15.0")});
     EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,30.0,-15.0,30.0,-15.0,H")});
 }
@@ -194,7 +196,7 @@ TEST(TextProtocol, FrameLevelErrors)
 TEST(TextProtocol, IgnoresBootNoiseBeforeFirstFrame)
 {
     Rig r;
-    r.port.rx += "ESP-ROM:esp32s3\r\nbuild: Mar 27 2021\r\n";
+    r.port.rx += "boot rom v2\r\nbuild: Mar 27 2021\r\n";
     EXPECT_EQ(r.send("PING"), std::vector<std::string>{line("PONG,3,0.1.0")});
 }
 
@@ -205,7 +207,7 @@ TEST(TextProtocol, SeveralRequestsInOneReadAnsweredInOrder)
     r.proc.service(r.now);
     EXPECT_EQ(r.port.takeLines(),
               (std::vector<std::string>{line("PONG,3,0.1.0"),
-                                        line("LIMITS,-90.0,90.0,-90.0,90.0"),
+                                        line("LIMITS,-90.0,90.0,-60.0,60.0"),
                                         line("SPEED,90.0")}));
 }
 
@@ -235,24 +237,18 @@ TEST(TextProtocol, DisableGoesLimpAndReportsD)
     Rig r;
     (void) r.send("ENABLE,20,10");
     EXPECT_EQ(r.send("DISABLE"), std::vector<std::string>{line("ACK,DISABLE")});
-    EXPECT_TRUE(r.panCh.idle);
+    EXPECT_FALSE(r.anyPowered());
     EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,20.0,10.0,20.0,10.0,D")});
 }
 
-TEST(TextProtocol, EnableBusFailureIsNakBus)
-{
-    Rig r;
-    r.panCh.failNext = true;
-    EXPECT_EQ(r.send("ENABLE"), std::vector<std::string>{line("NAK,ENABLE,BUS")});
-}
-
-TEST(TextProtocol, SlewBusFailureReportsErrBusOnceUntilRecovered)
+TEST(TextProtocol, StalledStepGeneratorReportsErrBusOnceUntilRecovered)
 {
     Rig r;
     (void) r.send("ENABLE");
     (void) r.send("MOVE,10,0");
-    r.panCh.failNext = true;
-    EXPECT_EQ(r.advance(10), std::vector<std::string>{line("ERR,BUS")});
+    r.panSteps.busy = true;
+    EXPECT_EQ(r.advance(StepperAxis::kStallReportMs), std::vector<std::string>{line("ERR,BUS")});
+    r.panSteps.busy = false;
     const std::vector<std::string> rest = r.advance(1000);
     EXPECT_EQ(rest, (std::vector<std::string>{line("EVT,BUSOK,-,0"), line("ARRIVED,10.0,0.0")}))
         << "the recovery is announced once, then the move finishes";
@@ -307,7 +303,12 @@ TEST(TextProtocol, VelocityMovesWithoutArrival)
     (void) r.send("ENABLE");
     EXPECT_EQ(r.send("VEL,20,-10"), std::vector<std::string>{line("ACK,VEL")});
     EXPECT_TRUE(r.advance(100).empty());
-    EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,2.0,-1.0,2.0,-1.0,M")});
+    // 0.1 s at the rate, less the ramp up to it.
+    EXPECT_NEAR(r.head.position().pan, 2.0f, 0.2f);
+    EXPECT_NEAR(r.head.position().tilt, -1.0f, 0.1f);
+    const std::vector<std::string> moving = r.send("POS");
+    ASSERT_EQ(moving.size(), 1u);
+    EXPECT_NE(moving[0].find(",M," + std::to_string(r.now)), std::string::npos) << moving[0];
     EXPECT_EQ(r.send("VEL,0,0"), std::vector<std::string>{line("ACK,VEL")});
     EXPECT_TRUE(r.advance(2000).empty());  // no ARRIVED, no TIMEOUT
 }
@@ -316,7 +317,7 @@ TEST(TextProtocol, VelocityErrors)
 {
     Rig r;
     (void) r.send("ENABLE");
-    EXPECT_EQ(r.send("VEL,600,0"), std::vector<std::string>{line("NAK,VEL,RNG")});
+    EXPECT_EQ(r.send("VEL,241,0"), std::vector<std::string>{line("NAK,VEL,RNG")});
     EXPECT_EQ(r.send("VEL,1"), std::vector<std::string>{line("NAK,VEL,FMT")});
 }
 
@@ -326,7 +327,11 @@ TEST(TextProtocol, WatchdogTimeoutIsReportedOnce)
     (void) r.send("ENABLE");
     (void) r.send("VEL,10,0");
     EXPECT_EQ(r.advance(600), std::vector<std::string>{line("TIMEOUT,VEL")});
-    EXPECT_EQ(r.send("POS"), std::vector<std::string>{r.pos("POS,5.0,0.0,5.0,0.0,H")});
+    // Braking gives back what the ramp up cost: about 0.5 s at 10°/s.
+    EXPECT_NEAR(r.head.position().pan, 5.0f, 0.1f);
+    const std::vector<std::string> held = r.send("POS");
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_NE(held[0].find(",H," + std::to_string(r.now)), std::string::npos) << held[0];
     EXPECT_TRUE(r.advance(1000).empty());
 }
 
@@ -449,46 +454,51 @@ TEST(TextProtocolReview, OverflowHandsTheStreamBack)  // M2
 TEST(TextCalibration, CapsReportsMotionRanges)
 {
     Rig r;
-    EXPECT_EQ(r.send("CAPS"), std::vector<std::string>{line("CAPS,1.0,500.0,500.0,50,5000,50")});
+    EXPECT_EQ(r.send("CAPS"), std::vector<std::string>{line("CAPS,1.0,240.0,240.0,50,5000,50")});
 }
 
 TEST(TextCalibration, CalQueryReportsAxisCalibration)
 {
     Rig r;
-    EXPECT_EQ(r.send("CAL,PAN"),
-              std::vector<std::string>{line("CAL,PAN,500,1500,2500,-90.0,90.0,N,F")});
+    EXPECT_EQ(r.send("CAL,PAN"), std::vector<std::string>{line("CAL,PAN,0,0,0,-90.0,90.0,N,F")});
+    EXPECT_EQ(r.send("CAL,TILT"), std::vector<std::string>{line("CAL,TILT,0,0,0,-60.0,60.0,N,F")});
 }
 
-TEST(TextCalibration, SetReverseSaveAndQuery)
+TEST(TextCalibration, SetLimitsSaveAndQuery)
 {
     Rig r;
-    EXPECT_EQ(r.send("CAL,TILT,2500,1500,500,-90,90"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("CAL,TILT,0,0,0,-45,120"), std::vector<std::string>{line("ACK,CAL")});
     EXPECT_EQ(r.send("CAL,TILT"),
-              std::vector<std::string>{line("CAL,TILT,2500,1500,500,-90.0,90.0,R,M")});
+              std::vector<std::string>{line("CAL,TILT,0,0,0,-45.0,120.0,N,M")});
     EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("ACK,CAL")});
     EXPECT_TRUE(r.store.hasRecord);
     EXPECT_EQ(r.send("CAL,TILT"),
-              std::vector<std::string>{line("CAL,TILT,2500,1500,500,-90.0,90.0,R,S")});
+              std::vector<std::string>{line("CAL,TILT,0,0,0,-45.0,120.0,N,S")});
 }
 
 TEST(TextCalibration, LimitsChangeWhileEnabledAndShowInLimits)
 {
     Rig r;
     (void) r.send("ENABLE");
-    EXPECT_EQ(r.send("CAL,PAN,500,1500,2500,-85,90"), std::vector<std::string>{line("ACK,CAL")});
-    EXPECT_EQ(r.send("LIMITS"), std::vector<std::string>{line("LIMITS,-85.0,90.0,-90.0,90.0")});
+    EXPECT_EQ(r.send("CAL,PAN,0,0,0,-85,90"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("CAL,TILT,0,0,0,-45,45"), std::vector<std::string>{line("ACK,CAL")});
+    EXPECT_EQ(r.send("LIMITS"), std::vector<std::string>{line("LIMITS,-85.0,90.0,-45.0,45.0")});
 }
 
 TEST(TextCalibration, Errors)
 {
     Rig r;
-    EXPECT_EQ(r.send("CAL,PAN,300,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
-    // 66036 would wrap to 500 in a uint16_t and pass validation if cast blindly.
-    EXPECT_EQ(r.send("CAL,PAN,66036,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
-    EXPECT_EQ(r.send("CAL,PAN,500"), std::vector<std::string>{line("NAK,CAL,FMT")});
+    // A stepper has no drive numbers to tune: anything but zeros is refused.
+    EXPECT_EQ(r.send("CAL,PAN,500,1500,2500,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    EXPECT_EQ(r.send("CAL,PAN,0,1,0,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    // 65536 would wrap to 0 in a uint16_t and pass validation if cast blindly.
+    EXPECT_EQ(r.send("CAL,PAN,65536,0,0,-90,90"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    EXPECT_EQ(r.send("CAL,PAN,0,0,0,-181,90"), std::vector<std::string>{line("NAK,CAL,RNG")})
+        << "beyond what the mechanism allows";
+    EXPECT_EQ(r.send("CAL,TILT,0,0,0,-45,136"), std::vector<std::string>{line("NAK,CAL,RNG")});
+    EXPECT_EQ(r.send("CAL,PAN,0"), std::vector<std::string>{line("NAK,CAL,FMT")});
     EXPECT_EQ(r.send("CAL,FOO"), std::vector<std::string>{line("NAK,CAL,FMT")});
     (void) r.send("ENABLE");
-    EXPECT_EQ(r.send("CAL,TILT,2500,1500,500,-90,90"), std::vector<std::string>{line("NAK,CAL,ENA")});
     EXPECT_EQ(r.send("CAL,RESET"), std::vector<std::string>{line("NAK,CAL,ENA")});
     r.store.failSave = true;
     EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("NAK,CAL,STO")});
@@ -497,11 +507,10 @@ TEST(TextCalibration, Errors)
 TEST(TextCalibration, ResetRestoresFactory)
 {
     Rig r;
-    (void) r.send("CAL,TILT,2500,1500,500,-90,90");
+    (void) r.send("CAL,TILT,0,0,0,-45,45");
     (void) r.send("CAL,SAVE");
     EXPECT_EQ(r.send("CAL,RESET"), std::vector<std::string>{line("ACK,CAL")});
-    EXPECT_EQ(r.send("CAL,TILT"),
-              std::vector<std::string>{line("CAL,TILT,500,1500,2500,-90.0,90.0,N,F")});
+    EXPECT_EQ(r.send("CAL,TILT"), std::vector<std::string>{line("CAL,TILT,0,0,0,-60.0,60.0,N,F")});
     EXPECT_FALSE(r.store.hasRecord);
 }
 
@@ -528,22 +537,19 @@ public:
 
 TEST(TextDiagnostics, AHeadWithNoDriverDataSaysSo)
 {
-    Rig r;  // built without a diagnostics source, like the servo head
+    Rig r;  // built without a diagnostics source, like a head on standalone drivers
     EXPECT_EQ(r.send("DIAG,PAN"), std::vector<std::string>{line("DIAG,PAN,N,0,0,0,0")});
     EXPECT_EQ(r.send("DIAG,TILT"), std::vector<std::string>{line("DIAG,TILT,N,0,0,0,0")});
 }
 
 TEST(TextDiagnostics, ReportsWhatTheDriverSays)
 {
-    FakeServoChannel                    panCh;
-    FakeServoChannel                    tiltCh;
-    Servo                               pan{panCh, Servo::Calibration{}};
-    Servo                               tilt{tiltCh, Servo::Calibration{}};
-    PanTilt                             head{pan, tilt};
+    ReferenceAxes                       axes;
+    PanTilt                             head{axes.pan, axes.tilt};
     FakeSerialPort                      port;
     FakeClock                           clock{1000};
     ::owlet::test::FakeCalibrationStore store;
-    ::owlet::core::Calibrator           calib{pan, tilt, head, store, factoryCal()};
+    ::owlet::core::Calibrator           calib{axes.pan, axes.tilt, head, store, factoryCal(axes)};
     FakeDiagnostics                     diag;
     TextProtocol                        proto{port, head, calib, clock, "0.1.0", &diag};
     ControlLoop                         loop{port, head, proto};
@@ -718,4 +724,58 @@ TEST(TextCalibrationSave, IsRefusedWhileTheHeadIsMoving)
     EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("NAK,CAL,MOV")});
     (void) r.advance(3000);
     EXPECT_EQ(r.send("CAL,SAVE"), std::vector<std::string>{line("ACK,CAL")});
+}
+
+// ── The whole stack, down to the step pulses ────────────────────────────────
+// ControlLoop → ProtocolMux → TextProtocol → PanTilt → StepperAxis → the step
+// generator and driver enable the Pico would be driving.
+
+TEST(TextStack, CommandsArriveAsStepPulsesAndDriverPower)
+{
+    ReferenceAxes                       axes;
+    PanTilt                             head{axes.pan, axes.tilt};
+    FakeSerialPort                      port;
+    FakeClock                           clock;
+    ::owlet::test::FakeCalibrationStore store;
+    ::owlet::core::Calibrator           calib{axes.pan, axes.tilt, head, store, factoryCal(axes)};
+    TextProtocol                        native{port, head, calib, clock, "test"};
+    ::owlet::core::ProtocolMux<1>       mux{{&native}};
+    ControlLoop                         loop{port, head, mux};
+    calib.begin();
+    loop.begin(clock.t);
+
+    const auto send = [&](const std::string& body)
+    {
+        port.rx += frame(body);
+        loop.service(clock.t);
+    };
+    const auto run = [&](uint32_t ms)
+    {
+        for (uint32_t t = 0; t < ms; t += 2)
+        {
+            clock.t += 2;
+            loop.service(clock.t);
+        }
+    };
+
+    send("MOVE,90,-60");
+    run(500);
+    EXPECT_FALSE(axes.anyPowered());
+    EXPECT_FALSE(axes.anyStepped());
+
+    send("ENABLE,20,10");
+    EXPECT_TRUE(axes.panEnable.on);
+    EXPECT_TRUE(axes.tiltEnable.on);
+    EXPECT_FALSE(axes.anyStepped()) << "ENABLE names the pose; it never moves the shaft";
+
+    send("SPEED,240");
+    send("MOVE,90,-60");
+    run(2000);
+    const auto steps = [](float deg)
+    { return std::lround(deg * ::owlet::test::referencePan().stepsPerDeg); };
+    EXPECT_EQ(axes.panSteps.total, steps(90.0f) - steps(20.0f));
+    EXPECT_EQ(axes.tiltSteps.total, steps(-60.0f) - steps(10.0f));
+
+    send("DISABLE");
+    EXPECT_FALSE(axes.anyPowered());
 }

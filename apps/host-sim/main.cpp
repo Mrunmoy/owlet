@@ -1,14 +1,15 @@
-// owlet_sim — runs the device core against a simulated PCA9685 and exposes
-// the protocol on a pseudo-terminal, exactly as the ESP exposes it on USB.
+// owlet_sim — runs the device core on a simulated stepper head (the reference
+// head's gearing, speeds and limits) and exposes the protocol on a
+// pseudo-terminal, exactly as the Pico exposes it on USB.
 //
 //   ./owlet_sim                 # prints the pty path, e.g. /dev/pts/7
 //   python -m owlet -p /dev/pts/7 ping
 //
 // With --link PATH the pty is also symlinked to PATH for a stable name.
-// With --cal-file PATH the calibration is persisted to PATH (as NVS would be
-// on the device); without it, $CAL,SAVE keeps it in memory only.
+// With --cal-file PATH the calibration is persisted to PATH (as the Pico keeps
+// it in flash); without it, $CAL,SAVE keeps it in memory only.
 // With --inject, lines typed on standard input raise events the simulated
-// servo head has no hardware to produce, so clients can be tested against
+// head has no hardware to produce, so clients can be tested against
 // them:  limit pan max | lost pan | stall tilt | fault pan 6 | online pan |
 //        offline tilt | homed | homefail tilt 1
 
@@ -20,13 +21,13 @@
 #include "owlet/core/PanTilt.hpp"
 #include "owlet/core/Version.hpp"
 #include "owlet/hal/IClock.hpp"
-#include "owlet/hal/IDelayProvider.hpp"
+#include "owlet/hal/IDigitalOutput.hpp"
 #include "owlet/hal/ISerialPort.hpp"
-#include "owlet/servo/Servo.hpp"
+#include "owlet/hal/IStepGenerator.hpp"
+#include "owlet/stepper/SharedEnable.hpp"
+#include "owlet/stepper/StepperAxis.hpp"
+#include "owlet/stepper/Tmc2209Standalone.hpp"
 #include "owlet/text/TextProtocol.hpp"
-#include "owlet/pca9685/PCA9685.hpp"
-#include "owlet/sim/PCA9685Simulator.hpp"
-#include "owlet/sim/VirtualI2CBus.hpp"
 
 #include <cerrno>
 #include <chrono>
@@ -55,12 +56,42 @@ void onSignal(int)
     g_stop = 1;
 }
 
-class NoDelay final : public ::owlet::hal::IDelayProvider
+// A step generator that takes every burst at once: the simulated motor
+// never stalls, so the step count is the shaft position.
+class SimStepGenerator final : public ::owlet::hal::IStepGenerator
 {
 public:
-    void delayUs(uint32_t) override {}
-    void delayMs(uint32_t) override {}
+    [[nodiscard]] bool emit(int32_t, uint32_t) override { return !m_halted; }
+    void halt() override { m_halted = true; }
+    void resume() override { m_halted = false; }
+    [[nodiscard]] bool halted() const override { return m_halted; }
+
+private:
+    bool m_halted{false};
 };
+
+// The drivers' shared enable line, with nothing attached.
+class NullOutput final : public ::owlet::hal::IDigitalOutput
+{
+public:
+    void set(bool) override {}
+};
+
+// The reference head (apps/pico-owlet/board.hpp): 1.8° motors at 1/16 through
+// 3:1 belts, 240 °/s, 1440 °/s², factory limits pan ±90 and tilt ±60, travel
+// up to pan ±180 and tilt ±135.
+::owlet::StepperAxis::Config referenceAxis(float limitDeg, float travelDeg)
+{
+    ::owlet::StepperAxis::Config c;
+    c.stepsPerDeg = ::owlet::tmc2209::stepsPerDegree(200, ::owlet::tmc2209::Microsteps::k16, 3.0f);
+    c.maxSpeedDegPerSec = 240.0f;
+    c.accelDegPerSec2 = 1440.0f;
+    c.minDeg = -limitDeg;
+    c.maxDeg = limitDeg;
+    c.travelMinDeg = -travelDeg;
+    c.travelMaxDeg = travelDeg;
+    return c;
+}
 
 // ISerialPort over the master side of a pty.
 class PtySerialPort final : public ::owlet::hal::ISerialPort
@@ -129,7 +160,7 @@ public:
 };
 
 // ICalibrationStore on a file (or memory when no path is given), using the
-// same byte format the ESP32 writes to NVS.
+// same byte format the Pico writes to its flash.
 class FileCalibrationStore final : public ::owlet::core::ICalibrationStore
 {
 public:
@@ -266,21 +297,14 @@ int main(int argc, char** argv)
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    ::owlet::sim::PCA9685Simulator chip;
-    ::owlet::sim::VirtualI2CBus    bus;
-    bus.attach(chip);
-    NoDelay        delay;
-    ::owlet::PCA9685 pwm(bus, delay);
-    if (!pwm.init() || !pwm.setAllIdle())
-    {
-        std::fprintf(stderr, "owlet_sim: PCA9685 simulator init failed\n");
-        return 1;
-    }
-
-    ::owlet::PCA9685::Channel panCh  = pwm.channel(0);
-    ::owlet::PCA9685::Channel tiltCh = pwm.channel(1);
-    ::owlet::Servo            pan(panCh, ::owlet::Servo::Calibration{});
-    ::owlet::Servo            tilt(tiltCh, ::owlet::Servo::Calibration{});
+    SimStepGenerator            panSteps;
+    SimStepGenerator            tiltSteps;
+    NullOutput                  enableLine;
+    ::owlet::SharedEnable       enable(enableLine);
+    ::owlet::SharedEnable::User panEnable(enable);
+    ::owlet::SharedEnable::User tiltEnable(enable);
+    ::owlet::StepperAxis        pan(panSteps, panEnable, referenceAxis(90.0f, 180.0f));
+    ::owlet::StepperAxis        tilt(tiltSteps, tiltEnable, referenceAxis(60.0f, 135.0f));
     SteadyClock                          clock;
     ::owlet::hal::NullInterruptLock      eventLock;  // one thread, no interrupts
     ::owlet::core::StaticEventBus<16, 2> events(eventLock, clock);
@@ -309,7 +333,7 @@ int main(int argc, char** argv)
     FileCalibrationStore      store(calFile);
     ::owlet::core::Calibrator calibrator(
         pan, tilt, head, store,
-        ::owlet::core::CalibrationRecord{::owlet::Servo::toAxisCalibration({}), ::owlet::Servo::toAxisCalibration({})});
+        ::owlet::core::CalibrationRecord{pan.defaultCalibration(), tilt.defaultCalibration()});
     calibrator.begin();
     ::owlet::text::TextProtocol protocol(port, head, calibrator, clock,
                                          ::owlet::core::kFirmwareVersion, nullptr, &events, &trouble);

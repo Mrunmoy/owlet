@@ -194,7 +194,7 @@ class PixelController:
         return max(-self.max_rate, min(self.max_rate, self.gain * err_deg))
 
 
-_MAX_RATE = 500.0  # deg/s, the device's velocity limit
+_MAX_RATE = 500.0  # deg/s, until the head's $CAPS velocity maximum has been read
 _CLOCK_REPLY_TIMEOUT_S = 0.5
 
 
@@ -398,7 +398,7 @@ class Tracker:
             self._clock_t0 = None
             self._next_resync = time.monotonic() + self._resync_s
         elif s.name == "READY":
-            self._fail("device rebooted (servos are limp; re-enable and restart tracking)",
+            self._fail("device rebooted (motors are limp; re-enable and restart tracking)",
                        "REBOOT")
         elif s.name == "TIMEOUT":
             self.timeouts += 1

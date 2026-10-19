@@ -4,8 +4,7 @@
     owlet selftest --yes      # no questions (for scripts)
 
 It reads the head's capabilities and soft limits first and scales everything
-from them, so the same test suits the servo head, the stepper head and the
-simulator. Nothing is hard-coded to one mechanism. The head is always left
+from them, so the same test suits any head and the simulator. Nothing is hard-coded to one mechanism. The head is always left
 disabled, whatever happens.
 
 Without home switches the head cannot know its absolute position: zero is

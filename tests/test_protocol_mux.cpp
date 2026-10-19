@@ -104,7 +104,7 @@ TEST(ProtocolMux, DropsUnclaimedLinesEntirely)
     FakeProtocol   hash('#', false);
     ProtocolMux<1> mux({&hash});
     // '#' inside the noise line must not be claimed: it isn't at line start.
-    feed(mux, "ESP-ROM # boot\r\n#OK\n");
+    feed(mux, "boot rom # boot\r\n#OK\n");
     EXPECT_EQ(hash.frames, std::vector<std::string>{"#OK\n"});
 }
 

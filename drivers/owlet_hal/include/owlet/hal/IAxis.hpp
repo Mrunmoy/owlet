@@ -6,8 +6,8 @@ namespace owlet::hal
 {
 
 /// One motor-driven axis, in degrees. This is the seam between the motion
-/// policy (owlet::core::PanTilt) and whatever turns the shaft: a hobby servo,
-/// a stepper, a DC motor with an encoder. Write one of these for a new motor
+/// policy (owlet::core::PanTilt) and whatever turns the shaft: a stepper, or
+/// another motor type such as a DC motor with an encoder. Write one of these for a new motor
 /// type and the core, every protocol and every client work unchanged.
 //
 /// Two motion modes, both advanced by tick(dtMs):
@@ -32,8 +32,8 @@ public:
     // ── Power ───────────────────────────────────────────────────────────────
 
     /// Power the axis and take `deg` (clamped to the limits) as its position.
-    /// A servo jumps there; a motor without absolute position adopts it as
-    /// the name of where it already is. Position and target both become `deg`.
+    /// A motor without absolute position (a stepper) adopts it as the name of
+    /// where it already is; one with absolute position would move there. Position and target both become `deg`.
     [[nodiscard]] virtual bool engageAt(float deg) = 0;
 
     /// Cut power. The last position is kept as the best available estimate.

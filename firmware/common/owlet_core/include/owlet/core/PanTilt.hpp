@@ -14,7 +14,7 @@ namespace owlet::core
 
 /// Two-axis head on two hal::IAxis objects. Owns the enable/limit/motion
 /// policy; each axis owns its own mapping and motion profile, so the motor
-/// type (servo, stepper, ...) is invisible from here upward.
+/// type (stepper, or any other) is invisible from here upward.
 //
 /// Partial engagement (one axis failed to release on DISABLE) is a fault
 /// state: new motion is refused, but STOP and VEL 0,0 still work on whatever

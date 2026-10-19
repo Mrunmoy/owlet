@@ -5,8 +5,8 @@
 namespace owlet::hal
 {
 
-/// Blocking-delay abstraction. On ESP32 this wraps esp_rom_delay_us /
-/// vTaskDelay; host tests usually stub it with a no-op or a fake-clock
+/// Blocking-delay abstraction. On the Pico this wraps sleep_us / sleep_ms;
+/// host tests usually stub it with a no-op or a fake-clock
 /// recorder.
 class IDelayProvider
 {

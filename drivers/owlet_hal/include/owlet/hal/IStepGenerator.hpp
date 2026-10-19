@@ -8,7 +8,7 @@ namespace owlet::hal
 /// Step and direction pulses for one step/dir motor driver (TMC2209, A4988,
 /// DRV8825, ...). The axis decides how many steps each control period needs;
 /// the platform turns that into evenly spaced, jitter-free pulses (a PIO state
-/// machine on the Pico, RMT on ESP32, a recorder in tests).
+/// machine on the Pico, a timer peripheral elsewhere, a recorder in tests).
 class IStepGenerator
 {
 public:

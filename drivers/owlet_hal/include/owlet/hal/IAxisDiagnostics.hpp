@@ -6,8 +6,8 @@ namespace owlet::hal
 {
 
 /// What a motor driver can tell about itself, in a driver-neutral shape. An
-/// axis with nothing to report (a hobby servo, a stepper driver without a
-/// data link) leaves `available` false and the rest zero.
+/// axis with nothing to report (a driver without a data link, or one whose
+/// supply is off) leaves `available` false and the rest zero.
 struct AxisDiagnostics
 {
     enum Fault : uint16_t

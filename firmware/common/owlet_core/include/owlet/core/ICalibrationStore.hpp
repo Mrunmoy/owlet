@@ -12,8 +12,8 @@ struct CalibrationRecord
     ::owlet::hal::AxisCalibration tilt;
 };
 
-/// Where calibration is kept between power cycles (NVS on ESP32, a flash
-/// sector on the Pico, a file in the simulator, an in-memory fake in tests).
+/// Where calibration is kept between power cycles (a flash sector on the
+/// Pico, a file in the simulator, an in-memory fake in tests).
 class ICalibrationStore
 {
 public:

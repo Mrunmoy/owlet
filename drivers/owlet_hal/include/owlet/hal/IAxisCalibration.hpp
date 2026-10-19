@@ -8,9 +8,9 @@ namespace owlet::hal
 /// Per-axis calibration in a motor-neutral shape, so storage, protocols and
 /// clients never need to know which motor type is fitted.
 //
-/// The three `drive` numbers mean whatever the axis type says they mean. A
-/// hobby servo uses the pulse widths (µs) at −90°, 0° and +90°; an axis with
-/// nothing to tune reports zeros and refuses anything else. `driveMin` above
+/// The three `drive` numbers mean whatever the axis type says they mean (for
+/// example the drive signal at −90°, 0° and +90°). An axis with nothing to
+/// tune, like the stepper, reports zeros and refuses anything else. `driveMin` above
 /// `driveMax` is the convention for a reversed axis.
 struct AxisCalibration
 {
@@ -38,7 +38,8 @@ public:
     [[nodiscard]] virtual bool acceptsCalibration(const AxisCalibration& cal) const = 0;
 
     /// True if applying `cal` to a powered axis would make it move by itself
-    /// (a servo given new pulse widths). Such changes need the axis released.
+    /// (an axis whose drive numbers set its output directly). Such changes
+    /// need the axis released.
     [[nodiscard]] virtual bool calibrationNeedsRelease(const AxisCalibration& cal) const = 0;
 
     /// Apply an accepted calibration. A powered axis left outside new limits

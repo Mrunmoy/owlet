@@ -1,17 +1,8 @@
 # Pure-virtual HAL interfaces (header-only).
-#
-# Dual build: appears as an ESP-IDF component under ESP_PLATFORM, and as a
-# host INTERFACE library otherwise.
 
-if(ESP_PLATFORM)
-    idf_component_register(
-        INCLUDE_DIRS "include"
-    )
-else()
-    add_library(owlet_hal INTERFACE)
-    add_library(owlet::hal ALIAS owlet_hal)
-    target_compile_features(owlet_hal INTERFACE cxx_std_17)
-    target_include_directories(owlet_hal INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-endif()
+add_library(owlet_hal INTERFACE)
+add_library(owlet::hal ALIAS owlet_hal)
+target_compile_features(owlet_hal INTERFACE cxx_std_17)
+target_include_directories(owlet_hal INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)

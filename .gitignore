@@ -1,12 +1,6 @@
 # Build artifacts
 /build/
 /apps/*/build/
-/apps/*/managed_components/
-/apps/*/sdkconfig
-/apps/*/sdkconfig.old
-/apps/*/sdkconfig.local
-/apps/*/sdkconfig.defaults.local
-/apps/*/dependencies.lock
 
 # Editor / IDE
 .vscode/
@@ -39,7 +33,6 @@ Thumbs.db
 
 # Python packaging
 *.egg-info/
-/apps/*/sdkconfig.bak*
 
 # Python packaging output
 /tools/python/build/

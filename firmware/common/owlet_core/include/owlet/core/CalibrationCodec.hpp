@@ -14,7 +14,7 @@ namespace owlet::core
 //
 ///   0  u32 magic 'OWLC'   4  u16 version   6  u16 reserved (0)
 ///   8  pan  : u16 drive_min, u16 drive_center, u16 drive_max, u16 pad, f32 min_deg, f32 max_deg
-///             (the drive numbers are pulse widths in µs on a servo head)
+///             (the drive numbers are 0 on the stepper head)
 ///   24 tilt : same
 ///   40 u32 CRC-32 (IEEE) of bytes 0..39
 /// All little-endian.

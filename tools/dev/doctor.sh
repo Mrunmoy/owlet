@@ -32,7 +32,7 @@ need python3            "client, tests, build.py"
 need clang-format       "code formatting"
 
 echo
-echo "Stepper head (Raspberry Pi Pico)"
+echo "Firmware (Raspberry Pi Pico)"
 need arm-none-eabi-gcc  "Pico compiler"
 need picotool           "Pico flashing"
 if [[ -z "${PICO_SDK_PATH:-}" ]]; then
@@ -43,10 +43,6 @@ else
     ok "PICO_SDK_PATH" "pico-sdk with TinyUSB"
 fi
 
-echo
-echo "Servo head (ESP32-S3)"
-need idf.py             "ESP-IDF build"
-need esptool.py         "ESP flashing"
 
 echo
 echo "Client"

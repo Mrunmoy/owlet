@@ -3,8 +3,8 @@
 //
 // Builds the platform objects, injects them into the platform-agnostic core,
 // and runs the service loop. All behaviour lives in firmware/common and
-// drivers/ (host-tested); nothing here makes decisions. The core, the
-// protocol and the PC client are the same ones the ESP32 servo head runs.
+// drivers/ (host-tested); nothing here makes decisions. owlet_sim runs the
+// same core and protocol on a PC.
 //
 // Wiring: docs/wiring/pico-tmc2209/.
 

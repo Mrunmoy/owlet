@@ -1,13 +1,10 @@
 # USB permissions for owlet heads, so flashing and talking to them needs no
 # sudo. Install with tools/dev/install-udev.sh.
 #
-# Raspberry Pi Pico (stepper head):
+# Raspberry Pi Pico:
 #   2e8a:0003  the chip's bootloader (BOOTSEL), which picotool loads firmware into
 #   2e8a:000a  owlet running: serial port plus the interface picotool uses to
 #              reboot the board into its bootloader without the button
 SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0666", TAG+="uaccess"
-
-# ESP32-S3 (servo head): the built-in USB-Serial-JTAG port.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", MODE="0666", TAG+="uaccess"

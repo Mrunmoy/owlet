@@ -17,7 +17,7 @@ namespace owlet
 /// tick the axis works out how many steps the next period needs and hands
 /// that burst to an IStepGenerator, which spaces the pulses in hardware.
 //
-/// Unlike a servo, a stepper stalls if its rate jumps, so every change of
+/// A stepper stalls if its rate jumps, so every change of
 /// speed is limited to the configured acceleration: moves ramp up, ramp down
 /// onto the target, and stop() brakes to rest instead of halting dead.
 //

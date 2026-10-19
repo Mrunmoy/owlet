@@ -75,12 +75,12 @@ PanTilt::Result PanTilt::enable()
     {
         return Result::Busy;
     }
-    // Last known position, not target: after a mid-move DISABLE the horn is
-    // near the position estimate, so energising there keeps the snap small.
+    // Last known position, not target: after a mid-move DISABLE the shaft is
+    // near the position estimate, so that is the pose to name.
     // Axes that are still powered are left alone.
-    // If the horn is outside the limits (they were narrowed, or the axis was
-    // re-pulsed, while disabled), energising "where it is" would snap it to
-    // the limit: the caller must choose a pose with enableAt() instead.
+    // If the shaft is outside the limits (they were narrowed while disabled),
+    // energising "where it is" would leave it outside them: the caller must
+    // choose a pose with enableAt() instead.
     if ((!m_pan.engaged() && !m_pan.positionInLimits()) ||
         (!m_tilt.engaged() && !m_tilt.positionInLimits()))
     {

@@ -6,8 +6,7 @@
 namespace owlet::hal
 {
 
-/// A bidirectional byte stream. On ESP32-S3 this is the USB-Serial-JTAG CDC
-/// port; on the host simulator a pseudo-terminal; in tests an in-memory fake.
+/// A bidirectional byte stream. On the Pico this is the native USB CDC port; on the host simulator a pseudo-terminal; in tests an in-memory fake.
 class ISerialPort : public IByteSource, public IByteSink
 {
 };

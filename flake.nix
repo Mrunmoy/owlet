@@ -1,13 +1,9 @@
 {
-  description = "owlet — 2-axis pan-tilt head (ESP32 + servos, or Raspberry Pi Pico + steppers; USB CDC text protocol)";
+  description = "owlet — 2-axis pan-tilt head (Raspberry Pi Pico + steppers; USB CDC text protocol)";
 
   inputs = {
-    nixpkgs-esp-dev.url = "github:mirrexagon/nixpkgs-esp-dev";
-    # Align nixpkgs to whatever the esp-dev overlay was built against.
-    # Avoids "undefined variable" errors caused by attribute renames between
-    # nixpkgs releases.
-    nixpkgs.follows = "nixpkgs-esp-dev/nixpkgs";
-    flake-utils.follows = "nixpkgs-esp-dev/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    flake-utils.url = "github:numtide/flake-utils";
 
     # Pico SDK as a source-only input *with submodules*: the nixpkgs pico-sdk
     # package leaves out TinyUSB, and the Pico head's USB port needs it.
@@ -20,20 +16,10 @@
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-esp-dev, flake-utils, pico-sdk-src }:
+  outputs = { self, nixpkgs, flake-utils, pico-sdk-src }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ nixpkgs-esp-dev.overlays.default ];
-          # python3.13-ecdsa-0.19.1 is flagged insecure (CVE-2024-23342 is a
-          # timing attack on *signing*; esptool uses ecdsa only for signature
-          # verification during flashing). Allowed explicitly so `nix develop`
-          # works without --impure.
-          config.permittedInsecurePackages = [
-            "python3.13-ecdsa-0.19.1"
-          ];
-        };
+        pkgs = import nixpkgs { inherit system; };
 
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
           pyserial
@@ -43,11 +29,7 @@
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            # ESP32-S3 is Xtensa; esp-idf-xtensa covers it (replaces the
-            # deprecated target-specific esp-idf-esp32s3).
-            esp-idf-xtensa
-
-            # Raspberry Pi Pico (RP2040, Cortex-M0+) stepper head.
+            # Raspberry Pi Pico (RP2040, Cortex-M0+).
             gcc-arm-embedded
             picotool
             doxygen
@@ -70,8 +52,6 @@
             export PICO_SDK_PATH=${pico-sdk-src}
             echo "owlet dev shell ready"
             echo "  host build:     ./build.py --host -t"
-            echo "  esp build:      ./build.py --esp"
-            echo "  esp flash:      ./build.py --esp --flash   (auto-detects the board)"
             echo "  pico build:     ./build.py --pico"
             echo "  pico flash:     ./build.py --pico --flash  (board in BOOTSEL, or running owlet)"
             echo "  pc client:      owlet --help"

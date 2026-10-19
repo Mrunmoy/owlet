@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Options ──────────────────────────────────────────────────────────────────
 # Tests and host tools only by default when owlet is the top-level project, so
 # a parent that add_subdirectory()s owlet (e.g. as a git submodule) just gets
-# the libraries: owlet::hal, ::pca9685, ::servo, ::core, ::text.
+# the libraries: owlet::hal, ::stepper, ::core, ::text.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(_OWLET_TOP_LEVEL ON)
 else()
@@ -25,8 +25,8 @@ endif()
 
 # ── Host-buildable libraries ─────────────────────────────────────────────────
 # drivers/ and firmware/common/ are platform-agnostic and compile on the host
-# for unit testing. The ESP-IDF firmware build lives under apps/esp32-owlet
-# and is invoked separately through idf.py (see build.py --esp).
+# for unit testing. The Pico firmware build lives under apps/pico-owlet and is
+# invoked separately (see build.py --pico).
 
 add_subdirectory(drivers)
 add_subdirectory(firmware/common)
@@ -43,7 +43,6 @@ if(OWLET_BUILD_TESTS)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
-    add_subdirectory(simulators)
     add_subdirectory(apps/host-sim)   # before tests: python_client needs owlet_sim
     add_subdirectory(tests)
 endif()

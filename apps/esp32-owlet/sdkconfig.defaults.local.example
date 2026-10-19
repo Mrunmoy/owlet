@@ -1,7 +1,0 @@
-# Copy to sdkconfig.defaults.local (gitignored) and put your measured
-# calibration here. See docs/CALIBRATION.md for how to measure.
-#
-# CONFIG_OWLET_PAN_PULSE_MIN_US=550
-# CONFIG_OWLET_PAN_PULSE_CENTER_US=1480
-# CONFIG_OWLET_PAN_PULSE_MAX_US=2420
-# CONFIG_OWLET_TILT_LIMIT_MIN_DEG=-45
